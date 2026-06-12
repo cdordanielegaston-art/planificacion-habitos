@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <title>Planificación - Estructura de Hábitos Deseada</title>
+<link rel="icon" type="image/png" href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAABEUlEQVR4nO3YsUoDQRSF4TM/+xBC3kCS2k7rVOnER5R0qbY2nXXE1koIdj6BPsMUk5nl36+/zLmwHC5bfn++/iJG5IgckSNyRI7IETkiR+SI3FQ7cHz/zuieHzZtvoDjApavzUnkiByRI3K0ateeanKW9Y+Q3FQ7cD7d/hZ4PGzG6IBzh+Vbv0vkiByRI3KM0sa93i3rISQ31Q7Mn28Z3f7+qU0HzAtYvjYnkSNyRI7I0apde6rJWdZDSG6qHbicPnJru8N2jA64dFi+9btEjsgROSLHKG3c692yHkJyU+3AdX7N6O72L2064LqA5WtzEjkiR+SIHK3ataeanGU9hOSIHJEjckSOyBE5IkfvAL39A+ZrQ9vBb0m4AAAAAElFTkSuQmCC">
 <meta name="theme-color" content="#F5F0E8">
 <link rel="manifest" href="manifest.json">
 <link rel="apple-touch-icon" href="hab-192.png">
@@ -38,7 +39,7 @@
 const { useState, useEffect, useRef, useMemo } = React;
 
 /* ===================== CONSTANTES ===================== */
-const STORE = 'planificacionHabitos_v1';
+const STORE = 'planificacionHabitos_v2';
 const SYNC_URL = 'https://ecddaniele.app.n8n.cloud/webhook/habitos-sync';
 const SYNC_CODE_KEY = 'habitos_syncCode';
 const AUTOSYNC_KEY = 'habitos_autosync';
@@ -54,8 +55,8 @@ const CHAT_MODELS = [
 ];
 const CHAT_TOOLS = [
   { name:'ver_semana', description:'Devuelve la semana actual: cada dia con sus bloques (titulo, desde, hasta). Usalo para mirar antes de editar.', schema:{type:'object',properties:{},required:[]} },
-  { name:'agregar_bloque', description:'Agrega un bloque de tiempo a un dia.', schema:{type:'object',properties:{dia:{type:'string',description:'lunes a domingo'},inicio:{type:'string',description:'HH:MM, ej 09:30'},fin:{type:'string',description:'HH:MM'},titulo:{type:'string'},color:{type:'string',description:'verde, verde claro, tan, terracota, azul, violeta, rosa u oliva'}},required:['dia','inicio','fin','titulo']} },
-  { name:'editar_bloque', description:'Edita o mueve un bloque existente, buscandolo por dia + titulo (coincidencia parcial). Pasa solo los campos a cambiar.', schema:{type:'object',properties:{dia:{type:'string'},titulo:{type:'string',description:'titulo actual o parte de el'},nuevo_titulo:{type:'string'},inicio:{type:'string'},fin:{type:'string'},nuevo_dia:{type:'string'},color:{type:'string'}},required:['dia','titulo']} },
+  { name:'agregar_bloque', description:'Agrega un bloque de tiempo a un dia.', schema:{type:'object',properties:{dia:{type:'string',description:'lunes a domingo'},inicio:{type:'string',description:'HH:MM, ej 09:30'},fin:{type:'string',description:'HH:MM'},titulo:{type:'string'},color:{type:'string',description:'verde, verde claro, tan, terracota, azul, violeta, rosa u oliva'},notas:{type:'string',description:'descripcion o notas del habito (opcional)'}},required:['dia','inicio','fin','titulo']} },
+  { name:'editar_bloque', description:'Edita o mueve un bloque existente, buscandolo por dia + titulo (coincidencia parcial). Pasa solo los campos a cambiar.', schema:{type:'object',properties:{dia:{type:'string'},titulo:{type:'string',description:'titulo actual o parte de el'},nuevo_titulo:{type:'string'},inicio:{type:'string'},fin:{type:'string'},nuevo_dia:{type:'string'},color:{type:'string'},notas:{type:'string',description:'nueva descripcion/notas'}},required:['dia','titulo']} },
   { name:'borrar_bloque', description:'Borra un bloque, buscandolo por dia + titulo (parcial).', schema:{type:'object',properties:{dia:{type:'string'},titulo:{type:'string'}},required:['dia','titulo']} },
   { name:'copiar_dia', description:'Copia todos los bloques de un dia a otros dias (reemplaza lo que haya en los destinos).', schema:{type:'object',properties:{origen:{type:'string'},destinos:{type:'array',items:{type:'string'}}},required:['origen','destinos']} },
   { name:'limpiar_dia', description:'Borra todos los bloques de un dia.', schema:{type:'object',properties:{dia:{type:'string'}},required:['dia']} },
@@ -94,30 +95,29 @@ const DIA_MAP = { 'lunes':0,'lun':0,'martes':1,'mar':1,'miercoles':2,'miércoles
 const resolverDia = d => { if(typeof d==='number' && d>=0 && d<=6) return d; const s=String(d||'').toLowerCase().trim(); if(s in DIA_MAP) return DIA_MAP[s]; const n=parseInt(s,10); return (n>=0&&n<=6)?n:0; };
 
 /* ===================== SEMANA PRECARGADA (la de Gastón) ===================== */
-// b(dia, inicio "HH:MM", fin "HH:MM", titulo, color)
 const C = { azul:'#9BB3C4', violeta:'#B39BC4', verdeClaro:'#A8C0A0', verde:'#7D9B76', rosa:'#C49BB3', tan:'#C4B59A', terra:'#D9A187', oliva:'#6F7A68' };
-function bloquesLunes(dia){
-  const def = [
-    ['00:00','07:00','DESCANSO RESTAURADOR', C.azul],
-    ['07:00','08:00','COMIENZO', C.violeta],
-    ['08:00','09:00','PUESTA A PUNTO Y REORGANIZACIÓN', C.verdeClaro],
-    ['09:00','14:00','Trabajo profundo rutinario y principal', C.rosa],
-    ['14:00','15:00','Almuerzo - Merienda + 2da y 3ra fruta del día', C.verdeClaro],
-    ['15:00','16:30','Segundo bloque: Trabajo profundo', C.rosa],
-    ['16:30','17:00','Misiones secundarias', C.tan],
-    ['17:00','17:30','COMPRAR PROVISIONES', C.terra],
-    ['17:30','18:45','ESTABILIZAR LA ATENCIÓN', C.azul],
-    ['18:45','19:30','CONTROL - Operaciones del día', C.verde],
-    ['19:30','20:15','GIMNASIO - MUSCULACIÓN', C.terra],
-    ['20:15','21:15','FINALIZACIÓN', C.violeta],
-    ['21:15','22:00','Cenar', C.verdeClaro],
-    ['22:00','23:00','BAÑO + PLANIFICACIÓN + PREPARACIÓN', C.tan],
-    ['23:00','24:00','DESCANSO RESTAURADOR', C.azul],
-  ];
-  return def.map(([i,f,t,c]) => ({ id:uid(), dia, ini:hhmm2min(i), fin:hhmm2min(f), titulo:t, color:c }));
-}
+// [dia 0-6, inicio_min, duracion_min, titulo(hábito), color, notas(descripción)] — base real de Gastón
+const SEMANA_BASE = [
+  [0, 0, 420, 'DESCANSO RESTAURADOR', '#9BB3C4', ''],
+  [0, 420, 60, 'COMIENZO', '#B39BC4', ''],
+  [0, 480, 60, 'PUESTA A PUNTO Y REORGANIZACIÓN', '#A8C0A0', 'CAFÉ Y TERMINAR DE ORDENAR PRIORIDADES.. ENTRADA EN MODO TRABAJO PROFUNDO PAULATINA PERO CONSTANTE ... REVISIÓN DE ALERTAS PARA REORDEN ANTES QUE NADA.. PARA EMPEZAR TRANQUILOS Y CON CONOCIMIENTO'],
+  [0, 540, 300, 'Trabajo profundo rutinario y principal', '#C49BB3', 'Las misiones críticas que te orquestaste/orquestaron ... el día anterior (importantes) + las cuestiones que surgiero en el día (urgente) --> ambas conforman lo crítico del día.. lo que no puede esperar'],
+  [0, 840, 60, 'Almuerzo - Merienda + Segunda y tercer fruta del día', '#B39BC4', '160 gramos de pechuga u atún + 30 gramos de harina de almendras + 1 banana'],
+  [0, 900, 90, 'Segundo bloque: Trabajo profundo', '#C49BB3', ''],
+  [0, 990, 30, 'Misiones secundarias', '#C4B59A', ''],
+  [0, 1020, 30, 'COMPRAR PROVISIONES', '#A8C0A0', 'Soda, latas de atún .... otros que ayuden a los hábitos que respalden quién quiero ser.'],
+  [0, 1050, 75, 'ESTABILIZAR LA ATENCIÓN', '#9BB3C4', ''],
+  [0, 1125, 45, 'CONTROL - Operaciones del día', '#D9A187', 'presentaciones digitales - consultas no vinculantes - trámites registro público - consultas Tango - pedidos de clientes - vencimientos - multas - requerimientos - respuesta a presentaciones por inspecciones, etcétera'],
+  [0, 1170, 45, 'GIMNASIO - MUSCULACIÓN', '#C4B59A', ''],
+  [0, 1215, 60, 'FINALIZACIÓN', '#6F7A68', ''],
+  [0, 1275, 45, 'Cenar', '#B39BC4', ''],
+  [0, 1320, 60, 'BAÑO+PLANIFICACIÓN+PREPARACIÓN', '#A8C0A0', 'MÚLTIPLES ALARMAS - ROPA CERCA - COMIDA COCINADA - ROPA DISPUESTA.. DISTANCIA DE ALARMAS .... PLANIFICACIÓN PERFECTA DEL DÍA SIGUIENTE PARA EMPEZAR A HORARIO LA JORNADA LABORAL'],
+  [0, 1380, 60, 'DESCANSO RESTAURADOR', '#9BB3C4', ''],
+  [1, 810, 60, 'ALMUERZO: 🕹️ - PUNTO DE INFLEXIÓN', '#A8C0A0', 'COCINÁ EN CANTIDADES (MUCHOS TOMATES CEBOLLAS MUCHO POLLO.. MUCHO ARROZ... ETCÉTERA) --> 🕹️'],
+  [5, 810, 60, 'COCINAR PARA SEMANA Y CONGELAR', '#D9A187', ''],
+];
 function semanaInicial(){
-  // PWA pública: arranca VACÍA. El usuario baja su semana real con el código de sync (☁️).
+  // PWA pública: arranca VACÍA. Bajás tu semana real con el código de sync (☁️).
   return [];
 }
 function actividadesIniciales(){
@@ -248,7 +248,7 @@ function App(){
     const act = actSel;
     const ini = Math.max(0, Math.min(MAX_DIA-15, iniMin));
     const fin = Math.min(MAX_DIA, ini + 60);
-    const nb = { id:uid(), dia, ini, fin, titulo: act ? act.nombre : 'Nuevo bloque', color: act ? act.color : PALETA[0] };
+    const nb = { id:uid(), dia, ini, fin, titulo: act ? act.nombre : 'Nuevo bloque', color: act ? act.color : PALETA[0], desc:'' };
     setBloques(bs => [...bs, nb]);
     if(!act) setEditId(nb.id); // si no había actividad elegida, abrir editor para nombrar
   };
@@ -302,12 +302,12 @@ function App(){
     try {
       const L = liveRef.current; const bs = L.bloques || [];
       if (name === 'ver_semana') {
-        const dias = {}; DIAS_LARGO.forEach((d,i)=>{ dias[d] = bs.filter(b=>b.dia===i).sort((a,b)=>a.ini-b.ini).map(b=>({titulo:b.titulo, desde:min2hhmm(b.ini), hasta:min2hhmm(b.fin)})); });
+        const dias = {}; DIAS_LARGO.forEach((d,i)=>{ dias[d] = bs.filter(b=>b.dia===i).sort((a,b)=>a.ini-b.ini).map(b=>({titulo:b.titulo, desde:min2hhmm(b.ini), hasta:min2hhmm(b.fin), notas:b.desc||''})); });
         return { semana: L.sem && L.sem.nombre, dias };
       }
       if (name === 'agregar_bloque') {
         const dia=resolverDia(args.dia), ini=hhmm2min(args.inicio); let fin=hhmm2min(args.fin); if(!(fin>ini)) fin=Math.min(1440,ini+60);
-        const nb={ id:uid(), dia, ini, fin, titulo:String(args.titulo||'Bloque'), color:resolverColor(args.color) };
+        const nb={ id:uid(), dia, ini, fin, titulo:String(args.titulo||'Bloque'), color:resolverColor(args.color), desc:String(args.notas||'') };
         setBloques(x=>[...x, nb]);
         return { ok:true, agregado:nb.titulo, dia:DIAS_LARGO[dia], desde:min2hhmm(ini), hasta:min2hhmm(fin) };
       }
@@ -315,7 +315,7 @@ function App(){
         const dia=resolverDia(args.dia), t=String(args.titulo||'').toLowerCase();
         const f = bs.find(b=>b.dia===dia && b.titulo.toLowerCase().includes(t)) || bs.find(b=>b.titulo.toLowerCase().includes(t));
         if(!f) return { error:'no encontre un bloque "'+args.titulo+'" en '+DIAS_LARGO[dia] };
-        const patch={}; if(args.nuevo_titulo)patch.titulo=args.nuevo_titulo; if(args.inicio)patch.ini=hhmm2min(args.inicio); if(args.fin)patch.fin=hhmm2min(args.fin); if(args.nuevo_dia!=null&&args.nuevo_dia!=='')patch.dia=resolverDia(args.nuevo_dia); if(args.color)patch.color=resolverColor(args.color);
+        const patch={}; if(args.nuevo_titulo)patch.titulo=args.nuevo_titulo; if(args.inicio)patch.ini=hhmm2min(args.inicio); if(args.fin)patch.fin=hhmm2min(args.fin); if(args.nuevo_dia!=null&&args.nuevo_dia!=='')patch.dia=resolverDia(args.nuevo_dia); if(args.color)patch.color=resolverColor(args.color); if(args.notas!=null)patch.desc=String(args.notas);
         updBloque(f.id, patch);
         return { ok:true, editado:f.titulo, cambios:patch };
       }
@@ -583,8 +583,9 @@ function Grilla({bloques, gridRef, esMobile, diaMobile, actSel, addBloque, setEd
                   <div key={b.id} onClick={e=>{e.stopPropagation();setEditId(b.id);}}
                     style={{position:'absolute',left:3,right:3,top:top+1,height:h-2,background:b.color,color:txt,borderRadius:7,padding: chico?'2px 7px':'4px 8px',
                       overflow:'hidden',boxShadow:'0 1px 2px rgba(0,0,0,.08)',border:'1px solid '+mezclarBorde(b.color),cursor:'pointer',display:'flex',flexDirection:'column',gap:1}}>
-                    <div style={{fontSize:11.5,fontWeight:600,lineHeight:1.15,whiteSpace:chico?'nowrap':'normal',overflow:'hidden',textOverflow:'ellipsis'}}>{b.titulo}</div>
+                    <div style={{fontSize:11.5,fontWeight:600,lineHeight:1.15,whiteSpace:chico?'nowrap':'normal',overflow:'hidden',textOverflow:'ellipsis'}}>{b.titulo}{b.desc?' 📝':''}</div>
                     {!chico && <div style={{fontSize:10,opacity:.85}}>{min2hhmm(b.ini)}–{min2hhmm(b.fin)}</div>}
+                    {!chico && b.desc && <div style={{fontSize:9.5,opacity:.82,lineHeight:1.22,marginTop:1,overflow:'hidden',display:'-webkit-box',WebkitLineClamp:4,WebkitBoxOrient:'vertical'}}>{b.desc}</div>}
                   </div>
                 );
               })}
@@ -603,9 +604,10 @@ function ModalBloque({b, paleta, onSave, onDel, onClose}){
   const [fin,setFin] = useState(min2hhmm(b.fin));
   const [dia,setDia] = useState(b.dia);
   const [color,setColor] = useState(b.color);
+  const [desc,setDesc] = useState(b.desc||'');
   const guardar = () => {
     let mi=hhmm2min(ini), mf=hhmm2min(fin); if(mf<=mi) mf=mi+30;
-    onSave({ titulo:titulo.trim()||'Bloque', ini:mi, fin:mf, dia:Number(dia), color });
+    onSave({ titulo:titulo.trim()||'Bloque', ini:mi, fin:mf, dia:Number(dia), color, desc:desc.trim() });
   };
   return (
     <Overlay onClose={onClose}>
@@ -622,6 +624,8 @@ function ModalBloque({b, paleta, onSave, onDel, onClose}){
       <div style={{display:'flex',flexWrap:'wrap',gap:9,marginTop:4}}>
         {paleta.map(c=><button key={c} onClick={()=>setColor(c)} style={{width:30,height:30,borderRadius:'50%',background:c,border:color===c?'3px solid var(--ink)':'2px solid transparent'}}/>)}
       </div>
+      <label style={{...lbl,marginTop:12}}>Notas</label>
+      <textarea value={desc} onChange={e=>setDesc(e.target.value)} placeholder="Descripción del hábito (opcional)" rows={3} style={{...inp,resize:'vertical',minHeight:64,lineHeight:1.35,fontFamily:'inherit'}}/>
       <div style={{display:'flex',gap:8,marginTop:20}}>
         <button onClick={onDel} style={{...btn,background:'#F3E3DE',color:'#A0392B'}}>Borrar</button>
         <div style={{flex:1}}/>
