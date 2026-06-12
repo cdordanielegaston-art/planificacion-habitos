@@ -117,8 +117,9 @@ const SEMANA_BASE = [
   [5, 810, 60, 'COCINAR PARA SEMANA Y CONGELAR', '#D9A187', ''],
 ];
 function semanaInicial(){
-  // PWA pública: arranca VACÍA. Bajás tu semana real con el código de sync (☁️).
-  return [];
+  // PWA pública (http) arranca VACÍA por privacidad; app local (file://) trae tu base.
+  if (location.protocol !== 'file:') return [];
+  return SEMANA_BASE.map(([dia,ini,dur,titulo,color,desc]) => ({ id:uid(), dia, ini, fin:ini+dur, titulo, color, desc }));
 }
 function actividadesIniciales(){
   return [
@@ -531,67 +532,91 @@ function PanelActividadesMobile({data,actSel,setActSel,addActividad}){
 }
 
 /* ===================== GRILLA ===================== */
+const zoomBtn = {border:'1px solid var(--line)',borderRadius:6,width:27,height:24,background:'var(--card)',fontSize:16,fontWeight:600,lineHeight:1,color:'var(--ink)'};
 function Grilla({bloques, gridRef, esMobile, diaMobile, actSel, addBloque, setEditId}){
   const diasVisibles = esMobile ? [diaMobile] : [0,1,2,3,4,5,6];
   const [nowMin,setNowMin] = useState(()=>{ const d=new Date(); return d.getHours()*60+d.getMinutes(); });
+  const [hPx,setHPx] = useState(()=>Number(localStorage.getItem('habitos_hpx'))||HORA_PX);
+  const [diaFoco,setDiaFoco] = useState(null);
   useEffect(()=>{ const t=setInterval(()=>{ const d=new Date(); setNowMin(d.getHours()*60+d.getMinutes()); },60000); return ()=>clearInterval(t); },[]);
+  useEffect(()=>{ try{ localStorage.setItem('habitos_hpx',String(hPx)); }catch(e){} }, [hPx]);
   const hoyWd = (new Date().getDay()+6)%7;
+  const hayFoco = diaFoco!=null && !esMobile;
 
   const colClick = (dia, e) => {
     const rect = e.currentTarget.getBoundingClientRect();
     const y = e.clientY - rect.top;
-    let min = Math.round((y / HORA_PX) * 60 / 30) * 30; // snap 30'
+    let min = Math.round((y / hPx) * 60 / 30) * 30; // snap 30'
     addBloque(dia, min);
   };
+  const zoom = d => setHPx(v => Math.max(26, Math.min(130, v + d)));
 
   return (
-    <div ref={gridRef} style={{flex:1,overflow:'auto',position:'relative'}}>
-      <div style={{display:'flex',minWidth: esMobile? '100%':'max(680px, 100%)'}}>
-        {/* columna horas */}
-        <div style={{width:52,flexShrink:0,position:'sticky',left:0,zIndex:6,background:'var(--bg)'}}>
-          <div style={{height:34,position:'sticky',top:0,zIndex:7,background:'var(--bg)',borderBottom:'1px solid var(--line)'}}/>
-          {Array.from({length:24}).map((_,h)=>(
-            <div key={h} style={{height:HORA_PX,position:'relative',borderRight:'1px solid var(--line)'}}>
-              <span style={{position:'absolute',top:-7,right:6,fontSize:10.5,color:'var(--ink-soft)'}}>{pad(h)}:00</span>
-            </div>
-          ))}
+    <div style={{flex:1,display:'flex',flexDirection:'column',minHeight:0}}>
+      {!esMobile && (
+        <div style={{display:'flex',alignItems:'center',gap:8,padding:'5px 12px',borderBottom:'1px solid var(--line)',flexShrink:0,fontSize:12,color:'var(--ink-soft)'}}>
+          <span>{hayFoco ? 'Mostrando '+DIAS_LARGO[diaFoco]+' en grande' : 'Tocá un día (arriba) para agrandarlo y leer sus notas'}</span>
+          {hayFoco && <button onClick={()=>setDiaFoco(null)} style={{border:'1px solid var(--line)',borderRadius:7,padding:'3px 9px',background:'var(--card)',fontSize:12,color:'var(--ink)'}}>↔ Ver toda la semana</button>}
+          <div style={{flex:1}}/>
+          <span style={{fontSize:11}}>Alto</span>
+          <button onClick={()=>zoom(-8)} title="Más compacto" style={zoomBtn}>−</button>
+          <button onClick={()=>zoom(8)} title="Más alto" style={zoomBtn}>+</button>
         </div>
-        {/* columnas de días */}
-        {diasVisibles.map(dia => (
-          <div key={dia} style={{flex:1,minWidth: esMobile?0:84,borderRight:'1px solid var(--line)',position:'relative'}}>
-            {/* header día */}
-            <div style={{height:34,position:'sticky',top:0,zIndex:5,background:'var(--bg)',borderBottom:'1px solid var(--line)',display:'flex',alignItems:'center',justifyContent:'center',gap:6}}>
-              <span style={{fontSize:13,fontWeight:dia===hoyWd?700:500,color:dia===hoyWd?'var(--ink)':'var(--ink-soft)'}}>{esMobile?DIAS_LARGO[dia]:DIAS[dia]}</span>
-              {dia===hoyWd && <span style={{width:6,height:6,borderRadius:'50%',background:'#C0392B'}}/>}
-            </div>
-            {/* celdas horarias (click para crear) */}
-            <div style={{position:'relative',height:24*HORA_PX,cursor: actSel?'copy':'pointer'}} onClick={e=>colClick(dia,e)}>
-              {Array.from({length:24}).map((_,h)=>(
-                <div key={h} style={{height:HORA_PX,borderBottom:'1px solid var(--line2)'}}/>
-              ))}
-              {/* línea de ahora */}
-              {dia===hoyWd && (
-                <div style={{position:'absolute',left:0,right:0,top:(nowMin/60)*HORA_PX,height:0,borderTop:'2px solid #C0392B',zIndex:4,pointerEvents:'none'}}>
-                  <span style={{position:'absolute',left:0,top:-4,width:7,height:7,borderRadius:'50%',background:'#C0392B'}}/>
-                </div>
-              )}
-              {/* bloques */}
-              {bloques.filter(b=>b.dia===dia).map(b => {
-                const top = (b.ini/60)*HORA_PX, h = Math.max(16,((b.fin-b.ini)/60)*HORA_PX);
-                const txt = textoSobre(b.color), chico = h < 34;
-                return (
-                  <div key={b.id} onClick={e=>{e.stopPropagation();setEditId(b.id);}}
-                    style={{position:'absolute',left:3,right:3,top:top+1,height:h-2,background:b.color,color:txt,borderRadius:7,padding: chico?'2px 7px':'4px 8px',
-                      overflow:'hidden',boxShadow:'0 1px 2px rgba(0,0,0,.08)',border:'1px solid '+mezclarBorde(b.color),cursor:'pointer',display:'flex',flexDirection:'column',gap:1}}>
-                    <div style={{fontSize:11.5,fontWeight:600,lineHeight:1.15,whiteSpace:chico?'nowrap':'normal',overflow:'hidden',textOverflow:'ellipsis'}}>{b.titulo}{b.desc?' 📝':''}</div>
-                    {!chico && <div style={{fontSize:10,opacity:.85}}>{min2hhmm(b.ini)}–{min2hhmm(b.fin)}</div>}
-                    {!chico && b.desc && <div style={{fontSize:9.5,opacity:.82,lineHeight:1.22,marginTop:1,overflow:'hidden',display:'-webkit-box',WebkitLineClamp:4,WebkitBoxOrient:'vertical'}}>{b.desc}</div>}
-                  </div>
-                );
-              })}
-            </div>
+      )}
+      <div ref={gridRef} style={{flex:1,overflow:'auto',position:'relative'}}>
+        <div style={{display:'flex',minWidth: esMobile? '100%':'max(760px, 100%)'}}>
+          {/* columna horas */}
+          <div style={{width:48,flexShrink:0,position:'sticky',left:0,zIndex:6,background:'var(--bg)'}}>
+            <div style={{height:34,position:'sticky',top:0,zIndex:7,background:'var(--bg)',borderBottom:'1px solid var(--line)'}}/>
+            {Array.from({length:24}).map((_,h)=>(
+              <div key={h} style={{height:hPx,position:'relative',borderRight:'1px solid var(--line)'}}>
+                <span style={{position:'absolute',top:-7,right:6,fontSize:10.5,color:'var(--ink-soft)'}}>{pad(h)}:00</span>
+              </div>
+            ))}
           </div>
-        ))}
+          {/* columnas de días */}
+          {diasVisibles.map(dia => {
+            const esFoco = dia===diaFoco;
+            const flexV = !hayFoco ? 1 : (esFoco ? 5 : 0.55);
+            const minW = esMobile ? 0 : (!hayFoco ? 116 : (esFoco ? 300 : 50));
+            const comprimida = hayFoco && !esFoco;
+            return (
+            <div key={dia} style={{flex:flexV,minWidth:minW,borderRight:'1px solid var(--line)',position:'relative',transition:'flex-grow .18s ease, min-width .18s ease'}}>
+              {/* header día (tocar para agrandar) */}
+              <div onClick={()=>{ if(!esMobile) setDiaFoco(esFoco?null:dia); }}
+                style={{height:34,position:'sticky',top:0,zIndex:5,background: esFoco?'#EAE3D4':'var(--bg)',borderBottom:'1px solid var(--line)',display:'flex',alignItems:'center',justifyContent:'center',gap:5,cursor:esMobile?'default':'pointer',userSelect:'none'}}>
+                <span style={{fontSize:13,fontWeight:dia===hoyWd?700:500,color:dia===hoyWd?'var(--ink)':'var(--ink-soft)',whiteSpace:'nowrap',overflow:'hidden'}}>{esMobile?DIAS_LARGO[dia]:(comprimida?DIAS[dia][0]:DIAS[dia])}</span>
+                {dia===hoyWd && <span style={{width:6,height:6,borderRadius:'50%',background:'#C0392B',flexShrink:0}}/>}
+                {esFoco && <span style={{fontSize:10,opacity:.6}}>▾</span>}
+              </div>
+              {/* celdas (tocar para crear) */}
+              <div style={{position:'relative',height:24*hPx,cursor: actSel?'copy':'pointer'}} onClick={e=>colClick(dia,e)}>
+                {Array.from({length:24}).map((_,h)=>(
+                  <div key={h} style={{height:hPx,borderBottom:'1px solid var(--line2)'}}/>
+                ))}
+                {dia===hoyWd && (
+                  <div style={{position:'absolute',left:0,right:0,top:(nowMin/60)*hPx,height:0,borderTop:'2px solid #C0392B',zIndex:4,pointerEvents:'none'}}>
+                    <span style={{position:'absolute',left:0,top:-4,width:7,height:7,borderRadius:'50%',background:'#C0392B'}}/>
+                  </div>
+                )}
+                {bloques.filter(b=>b.dia===dia).map(b => {
+                  const top = (b.ini/60)*hPx, h = Math.max(15,((b.fin-b.ini)/60)*hPx);
+                  const txt = textoSobre(b.color), chico = h < 32;
+                  const tip = b.titulo + (b.desc?'\n\n'+b.desc:'') + '\n('+min2hhmm(b.ini)+'–'+min2hhmm(b.fin)+')';
+                  return (
+                    <div key={b.id} title={tip} onClick={e=>{e.stopPropagation();setEditId(b.id);}}
+                      style={{position:'absolute',left:2,right:2,top:top+1,height:h-2,background:b.color,color:txt,borderRadius:7,padding: chico?'1px 6px':'3px 7px',
+                        overflow:'hidden',boxShadow:'0 1px 2px rgba(0,0,0,.08)',border:'1px solid '+mezclarBorde(b.color),cursor:'pointer',display:'flex',flexDirection:'column',gap:1}}>
+                      <div style={{fontSize: comprimida?10:11.5,fontWeight:600,lineHeight:1.15,whiteSpace:chico?'nowrap':'normal',overflow:'hidden',textOverflow:'ellipsis'}}>{comprimida?b.titulo:(b.titulo+(b.desc?' 📝':''))}</div>
+                      {!chico && !comprimida && <div style={{fontSize:10,opacity:.85}}>{min2hhmm(b.ini)}–{min2hhmm(b.fin)}</div>}
+                      {!chico && !comprimida && b.desc && <div style={{fontSize:9.8,opacity:.85,lineHeight:1.25,marginTop:1,overflow:'hidden',display:'-webkit-box',WebkitLineClamp: esFoco?40:4,WebkitBoxOrient:'vertical',whiteSpace:'normal'}}>{b.desc}</div>}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          );})}
+        </div>
       </div>
     </div>
   );
@@ -740,7 +765,7 @@ const btn = {borderRadius:9,padding:'10px 16px',fontSize:14,fontWeight:600};
 ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
 </script>
 <script>
-if ('serviceWorker' in navigator) {
+if ('serviceWorker' in navigator && location.protocol.indexOf('http') === 0) {
   window.addEventListener('load', function(){ navigator.serviceWorker.register('sw.js').catch(function(){}); });
 }
 </script>
