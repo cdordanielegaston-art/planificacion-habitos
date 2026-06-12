@@ -154,7 +154,6 @@ function App(){
   const [editId, setEditId] = useState(null);     // bloque en edición
   const [menuSemana, setMenuSemana] = useState(false);
   const [esMobile, setEsMobile] = useState(window.innerWidth < 760);
-  const [diaMobile, setDiaMobile] = useState(() => { const wd = (new Date().getDay()+6)%7; return wd; });
   const gridRef = useRef(null);
   // sync nube
   const [syncCode, setSyncCode] = useState(()=>localStorage.getItem(SYNC_CODE_KEY)||'');
@@ -188,8 +187,8 @@ function App(){
     const r = () => setEsMobile(window.innerWidth < 760);
     window.addEventListener('resize', r); return () => window.removeEventListener('resize', r);
   }, []);
-  // scroll inicial a las 7am
-  useEffect(() => { if(gridRef.current) gridRef.current.scrollTop = 7*HORA_PX - 10; }, []);
+  // scroll inicial a las 7am (respetando alturas personalizadas de filas)
+  useEffect(() => { if(!gridRef.current) return; let altos={}; try{ altos=JSON.parse(localStorage.getItem('habitos_altos'))||{}; }catch(e){} const hp=Number(localStorage.getItem('habitos_hpx'))||HORA_PX; let y=0; for(let h=0;h<7;h++) y+=Math.round(altos[h]||hp); gridRef.current.scrollTop = y - 10; }, []);
 
   /* ---- sincronización con la nube (n8n) ---- */
   const subir = async () => {
@@ -526,31 +525,47 @@ function PanelActividadesMobile({data,actSel,setActSel,addActividad}){
 
 /* ===================== GRILLA ===================== */
 const zoomBtn = {border:'1px solid var(--line)',borderRadius:6,width:27,height:24,background:'var(--card)',fontSize:16,fontWeight:600,lineHeight:1,color:'var(--ink)'};
-const ANCHO_KEY='habitos_anchos', HPX_KEY='habitos_hpx';
+const ANCHO_KEY='habitos_anchos', HPX_KEY='habitos_hpx', ALTO_KEY='habitos_altos';
 function Grilla({bloques, gridRef, esMobile, actSel, addBloque, setEditId}){
   const [nowMin,setNowMin] = useState(()=>{ const d=new Date(); return d.getHours()*60+d.getMinutes(); });
   const [hPx,setHPx] = useState(()=>Number(localStorage.getItem(HPX_KEY))||HORA_PX);
   const [anchos,setAnchos] = useState(()=>{ try{ return JSON.parse(localStorage.getItem(ANCHO_KEY))||{}; }catch(e){ return {}; } });
+  const [altos,setAltos] = useState(()=>{ try{ return JSON.parse(localStorage.getItem(ALTO_KEY))||{}; }catch(e){ return {}; } });
   const resz = useRef(null);
   useEffect(()=>{ const t=setInterval(()=>{ const d=new Date(); setNowMin(d.getHours()*60+d.getMinutes()); },60000); return ()=>clearInterval(t); },[]);
   useEffect(()=>{ try{ localStorage.setItem(HPX_KEY,String(hPx)); }catch(e){} }, [hPx]);
   useEffect(()=>{ try{ localStorage.setItem(ANCHO_KEY,JSON.stringify(anchos)); }catch(e){} }, [anchos]);
+  useEffect(()=>{ try{ localStorage.setItem(ALTO_KEY,JSON.stringify(altos)); }catch(e){} }, [altos]);
   const hoyWd = (new Date().getDay()+6)%7;
   const defW = esMobile?122:150;
   const anchoDe = dia => Math.round(anchos[dia]||defW);
+  const altoDe = h => Math.round(altos[h]||hPx);
+  // alturas acumuladas: cada HORA puede tener su propio alto (tipo Excel)
+  const offs = [0]; for(let h=0;h<24;h++) offs.push(offs[h]+altoDe(h));
+  const yDe = min => { const h=Math.max(0,Math.min(23,Math.floor(min/60))); return offs[h] + (min-h*60)/60*altoDe(h); };
+  const minDesdeY = y => { let h=23; for(let i=0;i<24;i++){ if(y<offs[i+1]){ h=i; break; } } return Math.max(0, Math.min(1439, h*60 + (y-offs[h])/altoDe(h)*60)); };
 
   const colClick = (dia, e) => {
     if(resz.current) return;
     const rect = e.currentTarget.getBoundingClientRect();
-    const y = e.clientY - rect.top;
-    let min = Math.round((y / hPx) * 60 / 30) * 30; // snap 30'
+    let min = Math.round(minDesdeY(e.clientY - rect.top) / 30) * 30; // snap 30'
     addBloque(dia, min);
   };
-  const zoom = d => setHPx(v => Math.max(26, Math.min(150, v + d)));
+  // el zoom escala TODO proporcionalmente (también las filas con alto personalizado)
+  const zoom = d => { const v=hPx; const nv=Math.max(26, Math.min(150, v + d)); if(nv===v) return; const f=nv/v; setHPx(nv); setAltos(a=>{ const out={}; for(const k in a) out[k]=Math.max(18,Math.min(600,Math.round(a[k]*f))); return out; }); };
 
-  const reszMove = e => { const r=resz.current; if(!r) return; const w=Math.max(46, Math.min(640, r.w0 + (e.clientX - r.x0))); setAnchos(a=>({...a,[r.dia]:w})); };
-  const reszEnd = () => { resz.current=null; window.removeEventListener('pointermove',reszMove); window.removeEventListener('pointerup',reszEnd); };
-  const reszStart = (dia,e) => { e.preventDefault(); e.stopPropagation(); resz.current={dia, x0:e.clientX, w0:anchoDe(dia)}; window.addEventListener('pointermove',reszMove); window.addEventListener('pointerup',reszEnd); };
+  // handlers estables (una sola instancia) para poder removerlos siempre, incluso al desmontar
+  const handlers = useRef(null);
+  if(!handlers.current){
+    const mv = e => { const r=resz.current; if(!r) return;
+      if(r.tipo==='fila'){ const v=Math.max(18, Math.min(600, r.h0 + (e.clientY - r.y0))); setAltos(a=>({...a,[r.h]:v})); }
+      else { const w=Math.max(46, Math.min(640, r.w0 + (e.clientX - r.x0))); setAnchos(a=>({...a,[r.dia]:w})); } };
+    const up = () => { setTimeout(()=>{ resz.current=null; },120); window.removeEventListener('pointermove',mv); window.removeEventListener('pointerup',up); };
+    handlers.current = {mv,up};
+  }
+  useEffect(()=>{ return ()=>{ window.removeEventListener('pointermove',handlers.current.mv); window.removeEventListener('pointerup',handlers.current.up); }; },[]);
+  const reszStart = (dia,e) => { e.preventDefault(); e.stopPropagation(); resz.current={tipo:'col', dia, x0:e.clientX, w0:anchoDe(dia)}; window.addEventListener('pointermove',handlers.current.mv); window.addEventListener('pointerup',handlers.current.up); };
+  const reszStartFila = (h,e) => { e.preventDefault(); e.stopPropagation(); resz.current={tipo:'fila', h, y0:e.clientY, h0:altoDe(h)}; window.addEventListener('pointermove',handlers.current.mv); window.addEventListener('pointerup',handlers.current.up); };
 
   const fsTit = w => Math.max(9, Math.min(16, 8.5 + (w-80)*0.032));
   const fsNota = w => Math.max(8.5, Math.min(14, 8 + (w-80)*0.026));
@@ -558,8 +573,8 @@ function Grilla({bloques, gridRef, esMobile, actSel, addBloque, setEditId}){
   return (
     <div style={{flex:1,display:'flex',flexDirection:'column',minHeight:0}}>
       <div style={{display:'flex',alignItems:'center',gap:8,padding:'5px 12px',borderBottom:'1px solid var(--line)',flexShrink:0,fontSize:12,color:'var(--ink-soft)'}}>
-        <span style={{whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>↔ Arrastrá el borde de una columna para ensancharla (la letra se agranda)</span>
-        <button onClick={()=>setAnchos({})} title="Volver todas las columnas al ancho normal" style={{border:'1px solid var(--line)',borderRadius:7,padding:'3px 8px',background:'var(--card)',fontSize:11.5,color:'var(--ink)',whiteSpace:'nowrap'}}>Reset</button>
+        <span style={{whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>↔ Arrastrá el borde de una columna, o ↕ el de una hora (izquierda), para agrandar lo que quieras leer</span>
+        <button onClick={()=>{setAnchos({});setAltos({});}} title="Volver columnas y filas al tamaño normal" style={{border:'1px solid var(--line)',borderRadius:7,padding:'3px 8px',background:'var(--card)',fontSize:11.5,color:'var(--ink)',whiteSpace:'nowrap'}}>Reset</button>
         <div style={{flex:1}}/>
         <span style={{fontSize:11}}>Alto</span>
         <button onClick={()=>zoom(-8)} title="Más compacto" style={zoomBtn}>−</button>
@@ -571,8 +586,12 @@ function Grilla({bloques, gridRef, esMobile, actSel, addBloque, setEditId}){
           <div style={{width:46,flexShrink:0,position:'sticky',left:0,zIndex:6,background:'var(--bg)'}}>
             <div style={{height:34,position:'sticky',top:0,zIndex:7,background:'var(--bg)',borderBottom:'1px solid var(--line)'}}/>
             {Array.from({length:24}).map((_,h)=>(
-              <div key={h} style={{height:hPx,position:'relative',borderRight:'1px solid var(--line)'}}>
+              <div key={h} style={{height:altoDe(h),position:'relative',borderRight:'1px solid var(--line)'}}>
                 <span style={{position:'absolute',top:-7,right:5,fontSize:10,color:'var(--ink-soft)'}}>{pad(h)}:00</span>
+                <div onPointerDown={e=>reszStartFila(h,e)} title={'Arrastrá para cambiar el alto de la fila de las '+pad(h)+':00'}
+                  style={{position:'absolute',left:0,right:0,bottom:-7,height:14,cursor:'row-resize',touchAction:'none',zIndex:9,display:'flex',alignItems:'center',justifyContent:'center'}}>
+                  <span style={{width:16,height:3,borderRadius:2,background:'#BBAF98',opacity:.65}}/>
+                </div>
               </div>
             ))}
           </div>
@@ -592,17 +611,17 @@ function Grilla({bloques, gridRef, esMobile, actSel, addBloque, setEditId}){
                 </div>
               </div>
               {/* celdas (tocar para crear) */}
-              <div style={{position:'relative',height:24*hPx,cursor: actSel?'copy':'pointer'}} onClick={e=>colClick(dia,e)}>
+              <div style={{position:'relative',height:offs[24],cursor: actSel?'copy':'pointer'}} onClick={e=>colClick(dia,e)}>
                 {Array.from({length:24}).map((_,h)=>(
-                  <div key={h} style={{height:hPx,borderBottom:'1px solid var(--line2)'}}/>
+                  <div key={h} style={{height:altoDe(h),borderBottom:'1px solid var(--line2)'}}/>
                 ))}
                 {dia===hoyWd && (
-                  <div style={{position:'absolute',left:0,right:0,top:(nowMin/60)*hPx,height:0,borderTop:'2px solid #C0392B',zIndex:4,pointerEvents:'none'}}>
+                  <div style={{position:'absolute',left:0,right:0,top:yDe(nowMin),height:0,borderTop:'2px solid #C0392B',zIndex:4,pointerEvents:'none'}}>
                     <span style={{position:'absolute',left:0,top:-4,width:7,height:7,borderRadius:'50%',background:'#C0392B'}}/>
                   </div>
                 )}
                 {bloques.filter(b=>b.dia===dia).map(b => {
-                  const top = (b.ini/60)*hPx, h = Math.max(14,((b.fin-b.ini)/60)*hPx);
+                  const top = yDe(b.ini), h = Math.max(14, yDe(b.fin)-yDe(b.ini));
                   const txt = textoSobre(b.color), chico = h < 28;
                   const tip = b.titulo + (b.desc?'\n\n'+b.desc:'') + '\n('+min2hhmm(b.ini)+'–'+min2hhmm(b.fin)+')';
                   const verHora = h > 48;
