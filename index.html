@@ -603,16 +603,19 @@ function Grilla({bloques, gridRef, esMobile, actSel, addBloque, setEditId}){
                 )}
                 {bloques.filter(b=>b.dia===dia).map(b => {
                   const top = (b.ini/60)*hPx, h = Math.max(14,((b.fin-b.ini)/60)*hPx);
-                  const txt = textoSobre(b.color), chico = h < 30;
+                  const txt = textoSobre(b.color), chico = h < 28;
                   const tip = b.titulo + (b.desc?'\n\n'+b.desc:'') + '\n('+min2hhmm(b.ini)+'–'+min2hhmm(b.fin)+')';
-                  const lineas = Math.max(1, Math.floor((h - (h>44?28:14)) / (fn*1.28)));
+                  const verHora = h > 48;
+                  const reserva = (ft*1.18)*2 + (verHora ? (Math.max(8,fn-1.5))*1.45 : 0) + 7; // título (hasta 2 líneas) + horario + padding
+                  const lineasNota = Math.floor((h - reserva) / (fn*1.32));
+                  const verNota = !chico && b.desc && lineasNota >= 1;
                   return (
                     <div key={b.id} title={tip} onClick={e=>{e.stopPropagation();setEditId(b.id);}}
                       style={{position:'absolute',left:2,right:2,top:top+1,height:h-2,background:b.color,color:txt,borderRadius:7,padding: chico?'1px 6px':'3px 7px',
-                        overflow:'hidden',boxShadow:'0 1px 2px rgba(0,0,0,.08)',border:'1px solid '+mezclarBorde(b.color),cursor:'pointer',display:'flex',flexDirection:'column',gap:1}}>
-                      <div style={{fontSize:ft,fontWeight:600,lineHeight:1.13,whiteSpace:chico?'nowrap':'normal',overflow:'hidden',textOverflow:'ellipsis'}}>{b.titulo}{b.desc?' 📝':''}</div>
-                      {!chico && h>44 && <div style={{fontSize:Math.max(8,fn-1.5),opacity:.8}}>{min2hhmm(b.ini)}–{min2hhmm(b.fin)}</div>}
-                      {!chico && b.desc && <div style={{fontSize:fn,opacity:.87,lineHeight:1.28,marginTop:1,overflow:'hidden',display:'-webkit-box',WebkitLineClamp:lineas,WebkitBoxOrient:'vertical',whiteSpace:'normal'}}>{b.desc}</div>}
+                        overflow:'hidden',boxShadow:'0 1px 2px rgba(0,0,0,.08)',border:'1px solid '+mezclarBorde(b.color),cursor:'pointer',display:'flex',flexDirection:'column',gap:0}}>
+                      <div style={{fontSize:ft,fontWeight:600,lineHeight:1.16,overflow:'hidden',display:'-webkit-box',WebkitLineClamp:chico?1:2,WebkitBoxOrient:'vertical',wordBreak:'break-word',flexShrink:0}}>{b.titulo}{b.desc?' 📝':''}</div>
+                      {verHora && <div style={{fontSize:Math.max(8,fn-1.5),opacity:.78,flexShrink:0}}>{min2hhmm(b.ini)}–{min2hhmm(b.fin)}</div>}
+                      {verNota && <div style={{fontSize:fn,opacity:.88,lineHeight:1.32,marginTop:1,overflow:'hidden',display:'-webkit-box',WebkitLineClamp:lineasNota,WebkitBoxOrient:'vertical',wordBreak:'break-word'}}>{b.desc}</div>}
                     </div>
                   );
                 })}
