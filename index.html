@@ -1,0 +1,744 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Planificación - Estructura de Hábitos Deseada</title>
+<meta name="theme-color" content="#F5F0E8">
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="hab-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="Hábitos">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.9/babel.min.js"></script>
+<style>
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  :root{
+    --bg:#F5F0E8; --ink:#2F3A2C; --ink-soft:#5C6657; --line:#E2DBCE; --line2:#ECE6DA;
+    --card:#FBF8F2; --serif:ui-serif,Georgia,Cambria,"Times New Roman",Times,serif;
+    --sans:ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;
+  }
+  html,body{margin:0;padding:0;background:var(--bg);color:var(--ink);font-family:var(--sans);}
+  body{overscroll-behavior:none;}
+  #root{height:100vh;}
+  .serif{font-family:var(--serif);}
+  button{font-family:inherit;cursor:pointer;border:none;background:none;color:inherit;}
+  input,select{font-family:inherit;}
+  ::-webkit-scrollbar{width:10px;height:10px;}
+  ::-webkit-scrollbar-thumb{background:#d8d0c0;border-radius:6px;}
+  ::-webkit-scrollbar-track{background:transparent;}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel" data-presets="react">
+const { useState, useEffect, useRef, useMemo } = React;
+
+/* ===================== CONSTANTES ===================== */
+const STORE = 'planificacionHabitos_v1';
+const SYNC_URL = 'https://ecddaniele.app.n8n.cloud/webhook/habitos-sync';
+const SYNC_CODE_KEY = 'habitos_syncCode';
+const AUTOSYNC_KEY = 'habitos_autosync';
+const EDITTS_KEY = 'habitos_editTs';
+const ANTHROPIC_KEY_STORAGE = 'habitos_anthropicKey';
+const OPENAI_KEY_STORAGE = 'habitos_openaiKey';
+const CHAT_MODEL_STORAGE = 'habitos_chatModel';
+const CHAT_MODELS = [
+  { id:'claude-haiku-4-5-20251001', label:'Haiku · rápido', prov:'anthropic' },
+  { id:'claude-sonnet-4-6', label:'Sonnet · potente', prov:'anthropic' },
+  { id:'gpt-4o-mini', label:'GPT-4o-mini', prov:'openai' },
+  { id:'gpt-4o', label:'GPT-4o', prov:'openai' }
+];
+const CHAT_TOOLS = [
+  { name:'ver_semana', description:'Devuelve la semana actual: cada dia con sus bloques (titulo, desde, hasta). Usalo para mirar antes de editar.', schema:{type:'object',properties:{},required:[]} },
+  { name:'agregar_bloque', description:'Agrega un bloque de tiempo a un dia.', schema:{type:'object',properties:{dia:{type:'string',description:'lunes a domingo'},inicio:{type:'string',description:'HH:MM, ej 09:30'},fin:{type:'string',description:'HH:MM'},titulo:{type:'string'},color:{type:'string',description:'verde, verde claro, tan, terracota, azul, violeta, rosa u oliva'}},required:['dia','inicio','fin','titulo']} },
+  { name:'editar_bloque', description:'Edita o mueve un bloque existente, buscandolo por dia + titulo (coincidencia parcial). Pasa solo los campos a cambiar.', schema:{type:'object',properties:{dia:{type:'string'},titulo:{type:'string',description:'titulo actual o parte de el'},nuevo_titulo:{type:'string'},inicio:{type:'string'},fin:{type:'string'},nuevo_dia:{type:'string'},color:{type:'string'}},required:['dia','titulo']} },
+  { name:'borrar_bloque', description:'Borra un bloque, buscandolo por dia + titulo (parcial).', schema:{type:'object',properties:{dia:{type:'string'},titulo:{type:'string'}},required:['dia','titulo']} },
+  { name:'copiar_dia', description:'Copia todos los bloques de un dia a otros dias (reemplaza lo que haya en los destinos).', schema:{type:'object',properties:{origen:{type:'string'},destinos:{type:'array',items:{type:'string'}}},required:['origen','destinos']} },
+  { name:'limpiar_dia', description:'Borra todos los bloques de un dia.', schema:{type:'object',properties:{dia:{type:'string'}},required:['dia']} },
+  { name:'crear_actividad', description:'Crea una actividad-plantilla (nombre + color) en el panel izquierdo.', schema:{type:'object',properties:{nombre:{type:'string'},color:{type:'string'}},required:['nombre']} },
+  { name:'cargar_semana_tipica', description:'Recarga la semana tipica base de Gaston en la semana activa (pisa lo que haya).', schema:{type:'object',properties:{},required:[]} }
+];
+const PALETA = ['#7D9B76','#A8C0A0','#C4B59A','#D9A187','#9BB3C4','#B39BC4','#C49BB3','#6F7A68'];
+const DIAS = ['Lun','Mar','Mié','Jue','Vie','Sáb','Dom'];
+const DIAS_LARGO = ['Lunes','Martes','Miércoles','Jueves','Viernes','Sábado','Domingo'];
+const HORA_PX = 46;            // alto de una hora en px
+const MIN_DIA = 0, MAX_DIA = 24*60;
+
+/* ===================== HELPERS ===================== */
+let _seq = 0;
+const uid = () => Date.now().toString(36) + (_seq++).toString(36) + Math.floor(Math.random()*1e6).toString(36);
+const pad = n => String(n).padStart(2,'0');
+const min2hhmm = m => { m = Math.max(0, Math.min(24*60, Math.round(m))); return pad(Math.floor(m/60)%24===0&&m===1440?24:Math.floor(m/60)) + ':' + pad(m%60); };
+const hhmm2min = s => { const [h,mm] = String(s).split(':').map(Number); return (h*60)+(mm||0); };
+const hora = () => { const d=new Date(); return pad(d.getHours())+':'+pad(d.getMinutes()); };
+// texto blanco u oscuro según luminancia del fondo
+const textoSobre = hex => {
+  const h = hex.replace('#',''); const r=parseInt(h.slice(0,2),16), g=parseInt(h.slice(2,4),16), b=parseInt(h.slice(4,6),16);
+  const lum = (0.299*r + 0.587*g + 0.114*b)/255;
+  return lum > 0.62 ? '#2F3A2C' : '#ffffff';
+};
+const mezclarBorde = hex => { // borde un poco más oscuro
+  const h = hex.replace('#',''); let r=parseInt(h.slice(0,2),16), g=parseInt(h.slice(2,4),16), b=parseInt(h.slice(4,6),16);
+  r=Math.max(0,r-30); g=Math.max(0,g-30); b=Math.max(0,b-30);
+  return '#'+pad(r.toString(16))+pad(g.toString(16))+pad(b.toString(16));
+};
+
+/* ===================== RESOLVERS PARA EL CHAT ===================== */
+const COLOR_NOMBRES = { 'verde':'#7D9B76','verde claro':'#A8C0A0','verdeclaro':'#A8C0A0','tan':'#C4B59A','beige':'#C4B59A','terracota':'#D9A187','naranja':'#D9A187','azul':'#9BB3C4','violeta':'#B39BC4','lila':'#B39BC4','rosa':'#C49BB3','oliva':'#6F7A68','verde oscuro':'#6F7A68' };
+const resolverColor = c => { if(!c) return PALETA[0]; const h=String(c).toLowerCase().trim(); const hex=h.replace('#',''); if(/^[0-9a-f]{6}$/.test(hex)) return '#'+hex; return COLOR_NOMBRES[h] || PALETA[0]; };
+const DIA_MAP = { 'lunes':0,'lun':0,'martes':1,'mar':1,'miercoles':2,'miércoles':2,'mie':2,'mié':2,'jueves':3,'jue':3,'viernes':4,'vie':4,'sabado':5,'sábado':5,'sab':5,'sáb':5,'domingo':6,'dom':6 };
+const resolverDia = d => { if(typeof d==='number' && d>=0 && d<=6) return d; const s=String(d||'').toLowerCase().trim(); if(s in DIA_MAP) return DIA_MAP[s]; const n=parseInt(s,10); return (n>=0&&n<=6)?n:0; };
+
+/* ===================== SEMANA PRECARGADA (la de Gastón) ===================== */
+// b(dia, inicio "HH:MM", fin "HH:MM", titulo, color)
+const C = { azul:'#9BB3C4', violeta:'#B39BC4', verdeClaro:'#A8C0A0', verde:'#7D9B76', rosa:'#C49BB3', tan:'#C4B59A', terra:'#D9A187', oliva:'#6F7A68' };
+function bloquesLunes(dia){
+  const def = [
+    ['00:00','07:00','DESCANSO RESTAURADOR', C.azul],
+    ['07:00','08:00','COMIENZO', C.violeta],
+    ['08:00','09:00','PUESTA A PUNTO Y REORGANIZACIÓN', C.verdeClaro],
+    ['09:00','14:00','Trabajo profundo rutinario y principal', C.rosa],
+    ['14:00','15:00','Almuerzo - Merienda + 2da y 3ra fruta del día', C.verdeClaro],
+    ['15:00','16:30','Segundo bloque: Trabajo profundo', C.rosa],
+    ['16:30','17:00','Misiones secundarias', C.tan],
+    ['17:00','17:30','COMPRAR PROVISIONES', C.terra],
+    ['17:30','18:45','ESTABILIZAR LA ATENCIÓN', C.azul],
+    ['18:45','19:30','CONTROL - Operaciones del día', C.verde],
+    ['19:30','20:15','GIMNASIO - MUSCULACIÓN', C.terra],
+    ['20:15','21:15','FINALIZACIÓN', C.violeta],
+    ['21:15','22:00','Cenar', C.verdeClaro],
+    ['22:00','23:00','BAÑO + PLANIFICACIÓN + PREPARACIÓN', C.tan],
+    ['23:00','24:00','DESCANSO RESTAURADOR', C.azul],
+  ];
+  return def.map(([i,f,t,c]) => ({ id:uid(), dia, ini:hhmm2min(i), fin:hhmm2min(f), titulo:t, color:c }));
+}
+function semanaInicial(){
+  // PWA pública: arranca VACÍA. El usuario baja su semana real con el código de sync (☁️).
+  return [];
+}
+function actividadesIniciales(){
+  return [
+    { id:uid(), nombre:'PRIMERO SE HACE', color:C.violeta },
+    { id:uid(), nombre:'DESPUÉS SE CONTROLA', color:C.verde },
+    { id:uid(), nombre:'Trabajo profundo', color:C.rosa },
+    { id:uid(), nombre:'Descanso restaurador', color:C.azul },
+    { id:uid(), nombre:'Gimnasio', color:C.terra },
+    { id:uid(), nombre:'Comida', color:C.verdeClaro },
+  ];
+}
+function estadoInicial(){
+  const sid = uid();
+  return {
+    actividades: actividadesIniciales(),
+    semanas: { [sid]: { nombre:'Mi semana', bloques: semanaInicial() } },
+    semanaActiva: sid,
+    _v: 1,
+  };
+}
+
+/* ===================== PERSISTENCIA ===================== */
+function cargar(){
+  try{ const raw = localStorage.getItem(STORE); if(raw){ const d = JSON.parse(raw); if(d && d.semanas && d.semanaActiva) return d; } }catch(e){}
+  return estadoInicial();
+}
+
+/* ===================== APP ===================== */
+function App(){
+  const [data, setData] = useState(cargar);
+  const [actSel, setActSel] = useState(null);     // actividad seleccionada para colocar
+  const [editId, setEditId] = useState(null);     // bloque en edición
+  const [menuSemana, setMenuSemana] = useState(false);
+  const [esMobile, setEsMobile] = useState(window.innerWidth < 760);
+  const [diaMobile, setDiaMobile] = useState(() => { const wd = (new Date().getDay()+6)%7; return wd; });
+  const gridRef = useRef(null);
+  // sync nube
+  const [syncCode, setSyncCode] = useState(()=>localStorage.getItem(SYNC_CODE_KEY)||'');
+  const [autosync, setAutosync] = useState(()=>localStorage.getItem(AUTOSYNC_KEY)==='1');
+  const [syncMsg, setSyncMsg] = useState('');
+  const [syncing, setSyncing] = useState(false);
+  const [showNube, setShowNube] = useState(false);
+  const editTsRef = useRef(Number(localStorage.getItem(EDITTS_KEY)||0));
+  const aplicandoRemoto = useRef(false);
+  const subirTimer = useRef(null);
+  const primerRenderSync = useRef(true);
+  // chat IA
+  const [anthropicKey, setAnthropicKey] = useState(()=>localStorage.getItem(ANTHROPIC_KEY_STORAGE)||'');
+  const [openaiKey, setOpenaiKey] = useState(()=>localStorage.getItem(OPENAI_KEY_STORAGE)||'');
+  const [chatModel, setChatModel] = useState(()=>localStorage.getItem(CHAT_MODEL_STORAGE)||'claude-haiku-4-5-20251001');
+  const [chatMsgs, setChatMsgs] = useState([]);
+  const [chatInput, setChatInput] = useState('');
+  const [chatBusy, setChatBusy] = useState(false);
+  const [showChat, setShowChat] = useState(false);
+  const [showChatCfg, setShowChatCfg] = useState(false);
+  const [chatErr, setChatErr] = useState('');
+  const chatEndRef = useRef(null);
+  const liveRef = useRef({});
+  useEffect(()=>{ try{ localStorage.setItem(ANTHROPIC_KEY_STORAGE, anthropicKey); }catch(e){} }, [anthropicKey]);
+  useEffect(()=>{ try{ localStorage.setItem(OPENAI_KEY_STORAGE, openaiKey); }catch(e){} }, [openaiKey]);
+  useEffect(()=>{ try{ localStorage.setItem(CHAT_MODEL_STORAGE, chatModel); }catch(e){} }, [chatModel]);
+  useEffect(()=>{ if(chatEndRef.current) chatEndRef.current.scrollIntoView({behavior:'smooth'}); }, [chatMsgs, chatBusy]);
+
+  useEffect(() => { try{ localStorage.setItem(STORE, JSON.stringify(data)); }catch(e){} }, [data]);
+  useEffect(() => {
+    const r = () => setEsMobile(window.innerWidth < 760);
+    window.addEventListener('resize', r); return () => window.removeEventListener('resize', r);
+  }, []);
+  // scroll inicial a las 7am
+  useEffect(() => { if(gridRef.current) gridRef.current.scrollTop = 7*HORA_PX - 10; }, []);
+
+  /* ---- sincronización con la nube (n8n) ---- */
+  const subir = async () => {
+    if(!syncCode.trim()){ setSyncMsg('Poné un código primero'); return; }
+    setSyncing(true);
+    try{
+      const ts = editTsRef.current || Date.now();
+      const blob = JSON.stringify({ payload: data, ts });
+      const res = await fetch(SYNC_URL, {method:'POST', headers:{'Content-Type':'text/plain'}, body: JSON.stringify({op:'set', code:syncCode.trim(), data:blob})});
+      const j = await res.json();
+      setSyncMsg(j && j.ok ? ('Subido ✓ '+hora()) : 'Error al subir');
+    }catch(e){ setSyncMsg('Sin conexión'); }
+    setSyncing(false);
+  };
+  const bajar = async (auto) => {
+    if(!syncCode.trim()){ if(!auto) setSyncMsg('Poné un código primero'); return; }
+    setSyncing(true);
+    try{
+      const res = await fetch(SYNC_URL, {method:'POST', headers:{'Content-Type':'text/plain'}, body: JSON.stringify({op:'get', code:syncCode.trim()})});
+      const j = await res.json();
+      if(j && j.found && j.data){
+        let parsed=null; try{ parsed = JSON.parse(j.data); }catch(e){}
+        const payload = (parsed && parsed.payload) ? parsed.payload : parsed;
+        const rts = (parsed && parsed.ts) ? parsed.ts : 0;
+        if(payload && payload.semanas){
+          if(auto && rts <= editTsRef.current){ setSyncMsg('Al día ✓'); setSyncing(false); return; }
+          aplicandoRemoto.current = true;
+          editTsRef.current = rts || Date.now();
+          try{ localStorage.setItem(EDITTS_KEY, String(editTsRef.current)); }catch(e){}
+          setData(payload);
+          setSyncMsg('Bajado ✓ '+hora());
+        } else setSyncMsg('Datos remotos inválidos');
+      } else setSyncMsg(auto ? 'Nube vacía' : 'No hay nada con ese código');
+    }catch(e){ setSyncMsg('Sin conexión'); }
+    setSyncing(false);
+  };
+  useEffect(()=>{ try{ localStorage.setItem(SYNC_CODE_KEY, syncCode); }catch(e){} }, [syncCode]);
+  useEffect(()=>{ try{ localStorage.setItem(AUTOSYNC_KEY, autosync?'1':'0'); }catch(e){} }, [autosync]);
+  useEffect(()=>{
+    if(primerRenderSync.current){ primerRenderSync.current=false; return; }
+    if(aplicandoRemoto.current){ aplicandoRemoto.current=false; return; }
+    editTsRef.current = Date.now();
+    try{ localStorage.setItem(EDITTS_KEY, String(editTsRef.current)); }catch(e){}
+    if(autosync && syncCode.trim()){ clearTimeout(subirTimer.current); subirTimer.current = setTimeout(()=>subir(), 1500); }
+  }, [data]);
+  useEffect(()=>{ if(autosync && syncCode.trim()) bajar(true); }, []);
+
+  const sem = data.semanas[data.semanaActiva];
+  const bloques = sem ? sem.bloques : [];
+
+  /* --------- mutadores --------- */
+  const setBloques = fn => setData(d => {
+    const s = d.semanas[d.semanaActiva];
+    return { ...d, semanas: { ...d.semanas, [d.semanaActiva]: { ...s, bloques: fn(s.bloques) } } };
+  });
+  const addBloque = (dia, iniMin) => {
+    const act = actSel;
+    const ini = Math.max(0, Math.min(MAX_DIA-15, iniMin));
+    const fin = Math.min(MAX_DIA, ini + 60);
+    const nb = { id:uid(), dia, ini, fin, titulo: act ? act.nombre : 'Nuevo bloque', color: act ? act.color : PALETA[0] };
+    setBloques(bs => [...bs, nb]);
+    if(!act) setEditId(nb.id); // si no había actividad elegida, abrir editor para nombrar
+  };
+  const updBloque = (id, patch) => setBloques(bs => bs.map(b => b.id===id ? { ...b, ...patch } : b));
+  const delBloque = id => { setBloques(bs => bs.filter(b => b.id!==id)); setEditId(null); };
+
+  const addActividad = (nombre, color) => {
+    const a = { id:uid(), nombre: nombre.trim(), color };
+    setData(d => ({ ...d, actividades: [...d.actividades, a] }));
+    setActSel(a);
+  };
+  const delActividad = id => setData(d => ({ ...d, actividades: d.actividades.filter(a=>a.id!==id) }));
+
+  /* --------- semanas --------- */
+  const nuevaSemana = () => {
+    const sid = uid();
+    setData(d => ({ ...d, semanas: { ...d.semanas, [sid]: { nombre:'Semana '+(Object.keys(d.semanas).length+1), bloques:[] } }, semanaActiva: sid }));
+    setMenuSemana(false);
+  };
+  const duplicarSemana = () => {
+    const sid = uid();
+    setData(d => { const s=d.semanas[d.semanaActiva]; return { ...d, semanas:{ ...d.semanas, [sid]:{ nombre:s.nombre+' (copia)', bloques:s.bloques.map(b=>({...b,id:uid()})) } }, semanaActiva:sid }; });
+    setMenuSemana(false);
+  };
+  const renombrarSemana = () => {
+    const n = prompt('Nombre de la semana:', sem.nombre); if(n==null) return;
+    setData(d => ({ ...d, semanas: { ...d.semanas, [d.semanaActiva]: { ...d.semanas[d.semanaActiva], nombre:n.trim()||sem.nombre } } }));
+  };
+  const borrarSemana = () => {
+    if(Object.keys(data.semanas).length<=1){ alert('Es tu única semana, no se puede borrar.'); return; }
+    if(!confirm('¿Borrar "'+sem.nombre+'"?')) return;
+    setData(d => { const ns={...d.semanas}; delete ns[d.semanaActiva]; const next=Object.keys(ns)[0]; return { ...d, semanas:ns, semanaActiva:next }; });
+    setMenuSemana(false);
+  };
+  const seleccionarSemana = id => { setData(d=>({...d, semanaActiva:id})); setMenuSemana(false); };
+
+  /* --------- copiar día --------- */
+  const copiarDia = (origen, destinos) => {
+    setBloques(bs => {
+      const delOrigen = bs.filter(b=>b.dia===origen);
+      let resto = bs.filter(b=>!destinos.includes(b.dia));
+      destinos.forEach(dst => { delOrigen.forEach(b => resto.push({ ...b, id:uid(), dia:dst })); });
+      return resto;
+    });
+  };
+
+  /* ---- chat IA con herramientas locales ---- */
+  liveRef.current = { bloques, sem, data };
+  const cargarSemanaTipica = () => setBloques(() => semanaInicial());
+  const ejecutarTool = (name, args) => {
+    try {
+      const L = liveRef.current; const bs = L.bloques || [];
+      if (name === 'ver_semana') {
+        const dias = {}; DIAS_LARGO.forEach((d,i)=>{ dias[d] = bs.filter(b=>b.dia===i).sort((a,b)=>a.ini-b.ini).map(b=>({titulo:b.titulo, desde:min2hhmm(b.ini), hasta:min2hhmm(b.fin)})); });
+        return { semana: L.sem && L.sem.nombre, dias };
+      }
+      if (name === 'agregar_bloque') {
+        const dia=resolverDia(args.dia), ini=hhmm2min(args.inicio); let fin=hhmm2min(args.fin); if(!(fin>ini)) fin=Math.min(1440,ini+60);
+        const nb={ id:uid(), dia, ini, fin, titulo:String(args.titulo||'Bloque'), color:resolverColor(args.color) };
+        setBloques(x=>[...x, nb]);
+        return { ok:true, agregado:nb.titulo, dia:DIAS_LARGO[dia], desde:min2hhmm(ini), hasta:min2hhmm(fin) };
+      }
+      if (name === 'editar_bloque') {
+        const dia=resolverDia(args.dia), t=String(args.titulo||'').toLowerCase();
+        const f = bs.find(b=>b.dia===dia && b.titulo.toLowerCase().includes(t)) || bs.find(b=>b.titulo.toLowerCase().includes(t));
+        if(!f) return { error:'no encontre un bloque "'+args.titulo+'" en '+DIAS_LARGO[dia] };
+        const patch={}; if(args.nuevo_titulo)patch.titulo=args.nuevo_titulo; if(args.inicio)patch.ini=hhmm2min(args.inicio); if(args.fin)patch.fin=hhmm2min(args.fin); if(args.nuevo_dia!=null&&args.nuevo_dia!=='')patch.dia=resolverDia(args.nuevo_dia); if(args.color)patch.color=resolverColor(args.color);
+        updBloque(f.id, patch);
+        return { ok:true, editado:f.titulo, cambios:patch };
+      }
+      if (name === 'borrar_bloque') {
+        const dia=resolverDia(args.dia), t=String(args.titulo||'').toLowerCase();
+        const f = bs.find(b=>b.dia===dia && b.titulo.toLowerCase().includes(t));
+        if(!f) return { error:'no encontre "'+args.titulo+'" en '+DIAS_LARGO[dia] };
+        delBloque(f.id);
+        return { ok:true, borrado:f.titulo };
+      }
+      if (name === 'copiar_dia') {
+        const origen=resolverDia(args.origen); const destinos=(args.destinos||[]).map(resolverDia).filter(d=>d!==origen);
+        copiarDia(origen, destinos);
+        return { ok:true, copiado_de:DIAS_LARGO[origen], a:destinos.map(d=>DIAS_LARGO[d]) };
+      }
+      if (name === 'limpiar_dia') {
+        const dia=resolverDia(args.dia); setBloques(x=>x.filter(b=>b.dia!==dia));
+        return { ok:true, limpiado:DIAS_LARGO[dia] };
+      }
+      if (name === 'crear_actividad') {
+        addActividad(String(args.nombre||'Actividad'), resolverColor(args.color));
+        return { ok:true, creada:args.nombre };
+      }
+      if (name === 'cargar_semana_tipica') { cargarSemanaTipica(); return { ok:true, mensaje:'Semana tipica cargada' }; }
+      return { error:'herramienta desconocida: '+name };
+    } catch(e){ return { error:String(e && e.message || e) }; }
+  };
+  const chatSystemPrompt = () => {
+    const acts = (data.actividades||[]).map(a=>a.nombre).join(', ');
+    return 'Sos el asistente dentro de la app "Planificacion - Estructura de Habitos Deseada" de Gaston: un planificador semanal por bloques de tiempo (7 dias Lun-Dom x 24h). Se breve y directo, en espanol rioplatense. Confirma en una linea lo que hiciste.\n\n'
+      + 'HERRAMIENTAS: ver_semana (mira que hay); agregar_bloque (dia, inicio HH:MM, fin HH:MM, titulo, color); editar_bloque (cambia o mueve, buscando por dia+titulo); borrar_bloque; copiar_dia (origen + destinos); limpiar_dia; crear_actividad; cargar_semana_tipica.\n'
+      + 'DIAS: lunes a domingo. COLORES: verde, verde claro, tan, terracota, azul, violeta, rosa, oliva.\n'
+      + 'Si el usuario da un horario vago ("gimnasio a la tarde"), elegi una franja razonable y deci cual pusiste. Para duplicar la rutina laboral usa copiar_dia. NUNCA digas que hiciste algo sin usar la herramienta correspondiente.\n\n'
+      + 'Actividades-plantilla guardadas: ' + (acts||'(ninguna)') + '\n'
+      + 'Semana actual: ' + JSON.stringify(ejecutarTool('ver_semana',{}));
+  };
+  const runAnthropic = async (uiMsgs, key) => {
+    const msgs = uiMsgs.map(m => ({ role:m.role, content:m.text }));
+    const tools = CHAT_TOOLS.map(t => ({ name:t.name, description:t.description, input_schema:t.schema }));
+    for (let i=0;i<6;i++){
+      const resp = await fetch('https://api.anthropic.com/v1/messages', { method:'POST', headers:{ 'content-type':'application/json','x-api-key':key,'anthropic-version':'2023-06-01','anthropic-dangerous-direct-browser-access':'true' }, body: JSON.stringify({ model:chatModel, max_tokens:1024, system:chatSystemPrompt(), messages:msgs, tools }) });
+      if(!resp.ok){ const t=await resp.text(); throw new Error('Anthropic '+resp.status+': '+t.slice(0,200)); }
+      const dataR = await resp.json();
+      msgs.push({ role:'assistant', content:dataR.content });
+      const toolUses = (dataR.content||[]).filter(b=>b.type==='tool_use');
+      if(dataR.stop_reason!=='tool_use' || toolUses.length===0) return (dataR.content||[]).filter(b=>b.type==='text').map(b=>b.text).join('\n').trim() || '(listo)';
+      const toolResults = toolUses.map(tu=>({ type:'tool_result', tool_use_id:tu.id, content:JSON.stringify(ejecutarTool(tu.name, tu.input||{})) }));
+      msgs.push({ role:'user', content:toolResults });
+      await new Promise(r=>setTimeout(r,90));
+    }
+    return '(me quede pensando de mas, proba de nuevo)';
+  };
+  const runOpenAI = async (uiMsgs, key) => {
+    const msgs = [{ role:'system', content:chatSystemPrompt() }, ...uiMsgs.map(m=>({ role:m.role, content:m.text }))];
+    const tools = CHAT_TOOLS.map(t=>({ type:'function', function:{ name:t.name, description:t.description, parameters:t.schema } }));
+    for(let i=0;i<6;i++){
+      const resp = await fetch('https://api.openai.com/v1/chat/completions', { method:'POST', headers:{ 'Authorization':'Bearer '+key, 'Content-Type':'application/json' }, body: JSON.stringify({ model:chatModel, messages:msgs, tools }) });
+      if(!resp.ok){ const t=await resp.text(); throw new Error('OpenAI '+resp.status+': '+t.slice(0,200)); }
+      const dataR = await resp.json();
+      const msg = dataR.choices[0].message; msgs.push(msg);
+      if(!msg.tool_calls || msg.tool_calls.length===0) return (msg.content||'(listo)').trim();
+      msg.tool_calls.forEach(tc=>{ let a={}; try{ a=JSON.parse(tc.function.arguments||'{}'); }catch(e){} msgs.push({ role:'tool', tool_call_id:tc.id, content:JSON.stringify(ejecutarTool(tc.function.name, a)) }); });
+      await new Promise(r=>setTimeout(r,90));
+    }
+    return '(me quede pensando de mas, proba de nuevo)';
+  };
+  const chatSend = async () => {
+    const txt = chatInput.trim(); if(!txt||chatBusy) return; setChatErr('');
+    const prov = (CHAT_MODELS.find(m=>m.id===chatModel)||{}).prov;
+    const key = prov==='anthropic'?anthropicKey:openaiKey;
+    if(!key.trim()){ setChatErr('Falta tu API key de '+(prov==='anthropic'?'Anthropic':'OpenAI')+'. Toca el engranaje y pegala.'); setShowChatCfg(true); return; }
+    setChatInput('');
+    const baseMsgs = [...chatMsgs, { role:'user', text:txt }];
+    setChatMsgs(baseMsgs); setChatBusy(true);
+    try{ const reply = prov==='anthropic'?await runAnthropic(baseMsgs,key.trim()):await runOpenAI(baseMsgs,key.trim()); setChatMsgs(m=>[...m,{ role:'assistant', text:reply }]); }
+    catch(e){ console.error('[chat]',e); setChatMsgs(m=>[...m,{ role:'assistant', text:'⚠️ '+(e.message||e) }]); }
+    finally{ setChatBusy(false); }
+  };
+
+  const editBloque = editId ? bloques.find(b=>b.id===editId) : null;
+
+  return (
+    <div style={{height:'100vh',display:'flex',flexDirection:'column',background:'var(--bg)'}}>
+      {/* ===== TOPBAR ===== */}
+      <header style={{display:'flex',alignItems:'center',gap:12,padding:'10px 16px',borderBottom:'1px solid var(--line)',flexShrink:0,position:'relative'}}>
+        <h1 className="serif" style={{margin:0,fontSize:22,fontWeight:400,letterSpacing:.2}}>Planificación</h1>
+        <span className="serif" style={{color:'var(--ink-soft)',fontSize:15,display: esMobile?'none':'inline'}}>· Estructura de Hábitos Deseada</span>
+        <div style={{position:'relative',marginLeft:8}}>
+          <button onClick={()=>setMenuSemana(v=>!v)} style={{display:'flex',alignItems:'center',gap:6,border:'1px solid var(--line)',borderRadius:8,padding:'6px 10px',background:'var(--card)',fontSize:14}}>
+            <span style={{maxWidth:160,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{sem.nombre}</span>
+            <span style={{fontSize:10,opacity:.6}}>▾</span>
+          </button>
+          {menuSemana && (
+            <div style={{position:'absolute',top:'110%',left:0,zIndex:40,background:'var(--card)',border:'1px solid var(--line)',borderRadius:10,boxShadow:'0 8px 24px rgba(0,0,0,.12)',minWidth:220,padding:6}}>
+              {Object.entries(data.semanas).map(([id,s]) => (
+                <button key={id} onClick={()=>seleccionarSemana(id)} style={{display:'block',width:'100%',textAlign:'left',padding:'8px 10px',borderRadius:6,fontSize:14,background: id===data.semanaActiva?'#EEE8DC':'transparent'}}>{s.nombre}</button>
+              ))}
+              <div style={{height:1,background:'var(--line)',margin:'6px 0'}}/>
+              <button onClick={nuevaSemana} style={mItem}>＋ Nueva semana</button>
+              <button onClick={duplicarSemana} style={mItem}>⧉ Duplicar esta</button>
+              <button onClick={renombrarSemana} style={mItem}>✎ Renombrar</button>
+              <button onClick={borrarSemana} style={{...mItem,color:'#a8553a'}}>🗑 Borrar</button>
+            </div>
+          )}
+        </div>
+        <div style={{flex:1}}/>
+        <button onClick={()=>setEditId('__copiar__')} title="Copiar un día a otros" style={{border:'1px solid var(--line)',borderRadius:8,padding:'6px 10px',background:'var(--card)',fontSize:13}}>⧉ Copiar día</button>
+        <button onClick={()=>setShowNube(true)} title="Sincronizar en la nube" style={{border:'1px solid var(--line)',borderRadius:8,padding:'6px 9px',background: autosync?'#E6EFE4':'var(--card)',fontSize:15}}>☁️</button>
+      </header>
+
+      {/* ===== CUERPO ===== */}
+      <div style={{flex:1,display:'flex',minHeight:0}}>
+        {/* PANEL ACTIVIDADES */}
+        {!esMobile && <PanelActividades {...{data,actSel,setActSel,addActividad,delActividad}} />}
+
+        {/* GRILLA */}
+        <div style={{flex:1,display:'flex',flexDirection:'column',minWidth:0}}>
+          {esMobile && (
+            <div style={{display:'flex',gap:4,padding:'8px 8px 4px',overflowX:'auto',flexShrink:0}}>
+              {DIAS.map((d,i)=>(
+                <button key={i} onClick={()=>setDiaMobile(i)} style={{flex:'1 0 auto',minWidth:44,padding:'6px 4px',borderRadius:8,fontSize:13,fontWeight: i===diaMobile?700:400,background: i===diaMobile?'var(--ink)':'var(--card)',color:i===diaMobile?'#fff':'var(--ink)',border:'1px solid var(--line)'}}>{d}</button>
+              ))}
+            </div>
+          )}
+          <Grilla {...{bloques, gridRef, esMobile, diaMobile, actSel, addBloque, setEditId}} />
+          {esMobile && <PanelActividadesMobile {...{data,actSel,setActSel,addActividad}} />}
+        </div>
+      </div>
+
+      {/* MODAL EDICIÓN BLOQUE */}
+      {editBloque && <ModalBloque {...{b:editBloque, paleta:PALETA, onSave:patch=>{updBloque(editBloque.id,patch);setEditId(null);}, onDel:()=>delBloque(editBloque.id), onClose:()=>setEditId(null)}} />}
+      {/* MODAL COPIAR DÍA */}
+      {editId==='__copiar__' && <ModalCopiar onCopiar={(o,d)=>{copiarDia(o,d);setEditId(null);}} onClose={()=>setEditId(null)} />}
+      {/* MODAL NUBE */}
+      {showNube && <ModalNube {...{syncCode,setSyncCode,autosync,setAutosync,syncing,syncMsg,onSubir:subir,onBajar:()=>bajar(false),onClose:()=>setShowNube(false)}} />}
+      {/* CHAT IA */}
+      {!showChat && <button onClick={()=>setShowChat(true)} title="Asistente" style={{position:'fixed',right:18,bottom:18,zIndex:60,width:54,height:54,borderRadius:'50%',background:'var(--ink)',color:'#fff',fontSize:24,boxShadow:'0 6px 20px rgba(0,0,0,.25)',border:'2px solid #fff'}}>💬</button>}
+      {showChat && <ChatPanel {...{chatMsgs,chatInput,setChatInput,chatBusy,chatErr,chatSend,onClose:()=>setShowChat(false),chatModel,setChatModel,anthropicKey,setAnthropicKey,openaiKey,setOpenaiKey,showChatCfg,setShowChatCfg,chatEndRef,onClear:()=>setChatMsgs([])}} />}
+    </div>
+  );
+}
+const mItem = {display:'block',width:'100%',textAlign:'left',padding:'8px 10px',borderRadius:6,fontSize:14};
+
+/* ===================== PANEL ACTIVIDADES (desktop) ===================== */
+function PanelActividades({data,actSel,setActSel,addActividad,delActividad}){
+  const [nombre,setNombre] = useState('');
+  const [color,setColor] = useState(PALETA[0]);
+  const crear = () => { if(!nombre.trim()) return; addActividad(nombre,color); setNombre(''); };
+  return (
+    <aside style={{width:230,flexShrink:0,borderRight:'1px solid var(--line)',display:'flex',flexDirection:'column',background:'rgba(255,255,255,.25)'}}>
+      <div style={{padding:'14px 14px 8px'}}>
+        <div className="serif" style={{fontSize:16,letterSpacing:1,textTransform:'uppercase',color:'var(--ink-soft)'}}>Actividades</div>
+        <div style={{fontSize:12,color:'var(--ink-soft)',marginTop:4}}>Tocá una y después un día (o tocá un hueco vacío de la grilla)</div>
+      </div>
+      <div style={{flex:1,overflowY:'auto',padding:'4px 10px'}}>
+        {data.actividades.map(a => (
+          <div key={a.id} onClick={()=>setActSel(actSel&&actSel.id===a.id?null:a)}
+            style={{display:'flex',alignItems:'center',gap:9,padding:'8px 9px',borderRadius:9,marginBottom:4,cursor:'pointer',
+              background: actSel&&actSel.id===a.id ? '#EEE8DC':'transparent', border:'1px solid '+(actSel&&actSel.id===a.id?mezclarBorde(a.color):'transparent')}}>
+            <span style={{width:14,height:14,borderRadius:'50%',background:a.color,flexShrink:0,boxShadow:'inset 0 0 0 1px rgba(0,0,0,.08)'}}/>
+            <span style={{fontSize:13.5,flex:1,lineHeight:1.2}}>{a.nombre}</span>
+            <button onClick={e=>{e.stopPropagation();delActividad(a.id);}} title="Quitar de la lista" style={{opacity:.35,fontSize:13,padding:2}}>✕</button>
+          </div>
+        ))}
+      </div>
+      <div style={{padding:12,borderTop:'1px solid var(--line)'}}>
+        <div style={{display:'flex',gap:6}}>
+          <input value={nombre} onChange={e=>setNombre(e.target.value)} onKeyDown={e=>e.key==='Enter'&&crear()} placeholder="Nueva actividad"
+            style={{flex:1,minWidth:0,border:'1px solid var(--line)',borderRadius:8,padding:'8px 10px',fontSize:13,background:'var(--card)'}}/>
+          <button onClick={crear} style={{background:color,color:textoSobre(color),borderRadius:8,width:38,fontSize:20,fontWeight:600,flexShrink:0}}>＋</button>
+        </div>
+        <div style={{display:'flex',flexWrap:'wrap',gap:7,marginTop:9}}>
+          {PALETA.map(c => (
+            <button key={c} onClick={()=>setColor(c)} style={{width:24,height:24,borderRadius:'50%',background:c,border: color===c?'2px solid var(--ink)':'2px solid transparent',boxShadow:'inset 0 0 0 1px rgba(0,0,0,.08)'}}/>
+          ))}
+        </div>
+      </div>
+    </aside>
+  );
+}
+
+/* ===================== PANEL ACTIVIDADES (mobile, barra inferior) ===================== */
+function PanelActividadesMobile({data,actSel,setActSel,addActividad}){
+  const [abierto,setAbierto] = useState(false);
+  const [nombre,setNombre] = useState('');
+  const [color,setColor] = useState(PALETA[0]);
+  const crear = () => { if(!nombre.trim()) return; addActividad(nombre,color); setNombre(''); setAbierto(false); };
+  return (
+    <div style={{flexShrink:0,borderTop:'1px solid var(--line)',background:'var(--card)'}}>
+      <div style={{display:'flex',gap:6,padding:'8px 10px',overflowX:'auto',alignItems:'center'}}>
+        {data.actividades.map(a => (
+          <button key={a.id} onClick={()=>setActSel(actSel&&actSel.id===a.id?null:a)}
+            style={{flex:'0 0 auto',display:'flex',alignItems:'center',gap:6,padding:'7px 11px',borderRadius:20,fontSize:13,
+              background: actSel&&actSel.id===a.id?a.color:'var(--bg)', color: actSel&&actSel.id===a.id?textoSobre(a.color):'var(--ink)', border:'1px solid var(--line)'}}>
+            <span style={{width:11,height:11,borderRadius:'50%',background:a.color,boxShadow:'inset 0 0 0 1px rgba(0,0,0,.1)'}}/>{a.nombre}
+          </button>
+        ))}
+        <button onClick={()=>setAbierto(v=>!v)} style={{flex:'0 0 auto',padding:'7px 12px',borderRadius:20,fontSize:18,fontWeight:700,background:'var(--ink)',color:'#fff'}}>＋</button>
+      </div>
+      {abierto && (
+        <div style={{padding:'4px 10px 12px'}}>
+          <div style={{display:'flex',gap:6}}>
+            <input value={nombre} onChange={e=>setNombre(e.target.value)} onKeyDown={e=>e.key==='Enter'&&crear()} placeholder="Nueva actividad" style={{flex:1,border:'1px solid var(--line)',borderRadius:8,padding:'9px 10px',fontSize:14,background:'var(--bg)'}}/>
+            <button onClick={crear} style={{background:color,color:textoSobre(color),borderRadius:8,padding:'0 16px',fontSize:18,fontWeight:600}}>OK</button>
+          </div>
+          <div style={{display:'flex',flexWrap:'wrap',gap:9,marginTop:9}}>
+            {PALETA.map(c => <button key={c} onClick={()=>setColor(c)} style={{width:28,height:28,borderRadius:'50%',background:c,border:color===c?'2px solid var(--ink)':'2px solid transparent'}}/>)}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ===================== GRILLA ===================== */
+function Grilla({bloques, gridRef, esMobile, diaMobile, actSel, addBloque, setEditId}){
+  const diasVisibles = esMobile ? [diaMobile] : [0,1,2,3,4,5,6];
+  const [nowMin,setNowMin] = useState(()=>{ const d=new Date(); return d.getHours()*60+d.getMinutes(); });
+  useEffect(()=>{ const t=setInterval(()=>{ const d=new Date(); setNowMin(d.getHours()*60+d.getMinutes()); },60000); return ()=>clearInterval(t); },[]);
+  const hoyWd = (new Date().getDay()+6)%7;
+
+  const colClick = (dia, e) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const y = e.clientY - rect.top;
+    let min = Math.round((y / HORA_PX) * 60 / 30) * 30; // snap 30'
+    addBloque(dia, min);
+  };
+
+  return (
+    <div ref={gridRef} style={{flex:1,overflow:'auto',position:'relative'}}>
+      <div style={{display:'flex',minWidth: esMobile? '100%':'max(680px, 100%)'}}>
+        {/* columna horas */}
+        <div style={{width:52,flexShrink:0,position:'sticky',left:0,zIndex:6,background:'var(--bg)'}}>
+          <div style={{height:34,position:'sticky',top:0,zIndex:7,background:'var(--bg)',borderBottom:'1px solid var(--line)'}}/>
+          {Array.from({length:24}).map((_,h)=>(
+            <div key={h} style={{height:HORA_PX,position:'relative',borderRight:'1px solid var(--line)'}}>
+              <span style={{position:'absolute',top:-7,right:6,fontSize:10.5,color:'var(--ink-soft)'}}>{pad(h)}:00</span>
+            </div>
+          ))}
+        </div>
+        {/* columnas de días */}
+        {diasVisibles.map(dia => (
+          <div key={dia} style={{flex:1,minWidth: esMobile?0:84,borderRight:'1px solid var(--line)',position:'relative'}}>
+            {/* header día */}
+            <div style={{height:34,position:'sticky',top:0,zIndex:5,background:'var(--bg)',borderBottom:'1px solid var(--line)',display:'flex',alignItems:'center',justifyContent:'center',gap:6}}>
+              <span style={{fontSize:13,fontWeight:dia===hoyWd?700:500,color:dia===hoyWd?'var(--ink)':'var(--ink-soft)'}}>{esMobile?DIAS_LARGO[dia]:DIAS[dia]}</span>
+              {dia===hoyWd && <span style={{width:6,height:6,borderRadius:'50%',background:'#C0392B'}}/>}
+            </div>
+            {/* celdas horarias (click para crear) */}
+            <div style={{position:'relative',height:24*HORA_PX,cursor: actSel?'copy':'pointer'}} onClick={e=>colClick(dia,e)}>
+              {Array.from({length:24}).map((_,h)=>(
+                <div key={h} style={{height:HORA_PX,borderBottom:'1px solid var(--line2)'}}/>
+              ))}
+              {/* línea de ahora */}
+              {dia===hoyWd && (
+                <div style={{position:'absolute',left:0,right:0,top:(nowMin/60)*HORA_PX,height:0,borderTop:'2px solid #C0392B',zIndex:4,pointerEvents:'none'}}>
+                  <span style={{position:'absolute',left:0,top:-4,width:7,height:7,borderRadius:'50%',background:'#C0392B'}}/>
+                </div>
+              )}
+              {/* bloques */}
+              {bloques.filter(b=>b.dia===dia).map(b => {
+                const top = (b.ini/60)*HORA_PX, h = Math.max(16,((b.fin-b.ini)/60)*HORA_PX);
+                const txt = textoSobre(b.color), chico = h < 34;
+                return (
+                  <div key={b.id} onClick={e=>{e.stopPropagation();setEditId(b.id);}}
+                    style={{position:'absolute',left:3,right:3,top:top+1,height:h-2,background:b.color,color:txt,borderRadius:7,padding: chico?'2px 7px':'4px 8px',
+                      overflow:'hidden',boxShadow:'0 1px 2px rgba(0,0,0,.08)',border:'1px solid '+mezclarBorde(b.color),cursor:'pointer',display:'flex',flexDirection:'column',gap:1}}>
+                    <div style={{fontSize:11.5,fontWeight:600,lineHeight:1.15,whiteSpace:chico?'nowrap':'normal',overflow:'hidden',textOverflow:'ellipsis'}}>{b.titulo}</div>
+                    {!chico && <div style={{fontSize:10,opacity:.85}}>{min2hhmm(b.ini)}–{min2hhmm(b.fin)}</div>}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/* ===================== MODAL EDITAR BLOQUE ===================== */
+function ModalBloque({b, paleta, onSave, onDel, onClose}){
+  const [titulo,setTitulo] = useState(b.titulo);
+  const [ini,setIni] = useState(min2hhmm(b.ini));
+  const [fin,setFin] = useState(min2hhmm(b.fin));
+  const [dia,setDia] = useState(b.dia);
+  const [color,setColor] = useState(b.color);
+  const guardar = () => {
+    let mi=hhmm2min(ini), mf=hhmm2min(fin); if(mf<=mi) mf=mi+30;
+    onSave({ titulo:titulo.trim()||'Bloque', ini:mi, fin:mf, dia:Number(dia), color });
+  };
+  return (
+    <Overlay onClose={onClose}>
+      <div className="serif" style={{fontSize:18,marginBottom:14}}>Editar bloque</div>
+      <label style={lbl}>Título</label>
+      <input value={titulo} onChange={e=>setTitulo(e.target.value)} style={inp} autoFocus/>
+      <div style={{display:'flex',gap:10,marginTop:12}}>
+        <div style={{flex:1}}><label style={lbl}>Desde</label><input type="time" step="300" value={ini} onChange={e=>setIni(e.target.value)} style={inp}/></div>
+        <div style={{flex:1}}><label style={lbl}>Hasta</label><input type="time" step="300" value={fin} onChange={e=>setFin(e.target.value)} style={inp}/></div>
+      </div>
+      <label style={{...lbl,marginTop:12}}>Día</label>
+      <select value={dia} onChange={e=>setDia(e.target.value)} style={inp}>{DIAS_LARGO.map((d,i)=><option key={i} value={i}>{d}</option>)}</select>
+      <label style={{...lbl,marginTop:12}}>Color</label>
+      <div style={{display:'flex',flexWrap:'wrap',gap:9,marginTop:4}}>
+        {paleta.map(c=><button key={c} onClick={()=>setColor(c)} style={{width:30,height:30,borderRadius:'50%',background:c,border:color===c?'3px solid var(--ink)':'2px solid transparent'}}/>)}
+      </div>
+      <div style={{display:'flex',gap:8,marginTop:20}}>
+        <button onClick={onDel} style={{...btn,background:'#F3E3DE',color:'#A0392B'}}>Borrar</button>
+        <div style={{flex:1}}/>
+        <button onClick={onClose} style={{...btn,background:'var(--bg)',border:'1px solid var(--line)'}}>Cancelar</button>
+        <button onClick={guardar} style={{...btn,background:'var(--ink)',color:'#fff'}}>Guardar</button>
+      </div>
+    </Overlay>
+  );
+}
+
+/* ===================== MODAL COPIAR DÍA ===================== */
+function ModalCopiar({onCopiar, onClose}){
+  const [origen,setOrigen] = useState(0);
+  const [destinos,setDestinos] = useState([1,2,3,4]);
+  const toggle = i => setDestinos(d => d.includes(i)?d.filter(x=>x!==i):[...d,i]);
+  return (
+    <Overlay onClose={onClose}>
+      <div className="serif" style={{fontSize:18,marginBottom:6}}>Copiar un día</div>
+      <div style={{fontSize:13,color:'var(--ink-soft)',marginBottom:14}}>Copia todos los bloques de un día a otros (reemplaza lo que haya en los destinos).</div>
+      <label style={lbl}>Copiar desde</label>
+      <select value={origen} onChange={e=>setOrigen(Number(e.target.value))} style={inp}>{DIAS_LARGO.map((d,i)=><option key={i} value={i}>{d}</option>)}</select>
+      <label style={{...lbl,marginTop:14}}>Pegar en</label>
+      <div style={{display:'flex',flexWrap:'wrap',gap:7,marginTop:6}}>
+        {DIAS.map((d,i)=>(
+          <button key={i} disabled={i===origen} onClick={()=>toggle(i)} style={{padding:'8px 12px',borderRadius:8,fontSize:13,opacity:i===origen?.35:1,
+            background: destinos.includes(i)&&i!==origen?'var(--ink)':'var(--bg)', color: destinos.includes(i)&&i!==origen?'#fff':'var(--ink)', border:'1px solid var(--line)'}}>{d}</button>
+        ))}
+      </div>
+      <div style={{display:'flex',gap:8,marginTop:22}}>
+        <button onClick={onClose} style={{...btn,background:'var(--bg)',border:'1px solid var(--line)',flex:1}}>Cancelar</button>
+        <button onClick={()=>onCopiar(origen,destinos.filter(d=>d!==origen))} style={{...btn,background:'var(--ink)',color:'#fff',flex:1}}>Copiar</button>
+      </div>
+    </Overlay>
+  );
+}
+
+/* ===================== CHAT IA (panel flotante) ===================== */
+function ChatPanel(props){
+  const { chatMsgs,chatInput,setChatInput,chatBusy,chatErr,chatSend,onClose,chatModel,setChatModel,anthropicKey,setAnthropicKey,openaiKey,setOpenaiKey,showChatCfg,setShowChatCfg,chatEndRef,onClear } = props;
+  return (
+    <div style={{position:'fixed',right:16,bottom:16,zIndex:70,width:'min(384px, calc(100vw - 24px))',height:'min(560px, calc(100vh - 32px))',background:'var(--card)',borderRadius:16,boxShadow:'0 16px 50px rgba(0,0,0,.28)',border:'1px solid var(--line)',display:'flex',flexDirection:'column',overflow:'hidden'}}>
+      <div style={{display:'flex',alignItems:'center',gap:8,padding:'10px 12px',borderBottom:'1px solid var(--line)',background:'rgba(255,255,255,.4)'}}>
+        <span style={{fontSize:18}}>💬</span>
+        <div className="serif" style={{fontSize:15,flex:1}}>Asistente</div>
+        <select value={chatModel} onChange={e=>setChatModel(e.target.value)} style={{fontSize:11.5,border:'1px solid var(--line)',borderRadius:7,padding:'4px 6px',background:'var(--bg)'}}>
+          {CHAT_MODELS.map(m=><option key={m.id} value={m.id}>{m.label}</option>)}
+        </select>
+        <button onClick={()=>setShowChatCfg(v=>!v)} title="Configurar" style={{fontSize:16,padding:4}}>⚙️</button>
+        <button onClick={onClose} title="Cerrar" style={{fontSize:18,padding:4,opacity:.6}}>✕</button>
+      </div>
+      {showChatCfg && (
+        <div style={{padding:'10px 12px',borderBottom:'1px solid var(--line)',background:'var(--bg)',fontSize:12.5}}>
+          <div style={{color:'var(--ink-soft)',marginBottom:6}}>Tus API keys quedan solo en este dispositivo.</div>
+          <label style={{fontSize:11,fontWeight:600}}>Anthropic (Haiku/Sonnet)</label>
+          <input value={anthropicKey} onChange={e=>setAnthropicKey(e.target.value)} type="password" placeholder="sk-ant-..." style={{...inp,padding:'7px 9px',marginBottom:6}}/>
+          <label style={{fontSize:11,fontWeight:600}}>OpenAI (GPT)</label>
+          <input value={openaiKey} onChange={e=>setOpenaiKey(e.target.value)} type="password" placeholder="sk-..." style={{...inp,padding:'7px 9px'}}/>
+          <button onClick={onClear} style={{marginTop:8,fontSize:12,color:'var(--ink-soft)',textDecoration:'underline'}}>Limpiar conversación</button>
+        </div>
+      )}
+      <div style={{flex:1,overflowY:'auto',padding:12,display:'flex',flexDirection:'column',gap:8}}>
+        {chatMsgs.length===0 && <div style={{color:'var(--ink-soft)',fontSize:13,textAlign:'center',marginTop:16,lineHeight:1.6}}>Pedime cosas como:<br/>"poné gimnasio jue y vie de 19:30 a 20:30"<br/>"copiá el lunes a toda la semana"<br/>"borrá el almuerzo del sábado"<br/>"mové la cena del lunes a las 21"</div>}
+        {chatMsgs.map((m,i)=>(
+          <div key={i} style={{alignSelf:m.role==='user'?'flex-end':'flex-start',maxWidth:'86%',background:m.role==='user'?'var(--ink)':'var(--bg)',color:m.role==='user'?'#fff':'var(--ink)',padding:'8px 11px',borderRadius:12,fontSize:13.5,lineHeight:1.4,whiteSpace:'pre-wrap',border:m.role==='user'?'none':'1px solid var(--line)'}}>{m.text}</div>
+        ))}
+        {chatBusy && <div style={{alignSelf:'flex-start',color:'var(--ink-soft)',fontSize:13,padding:'4px 8px'}}>pensando…</div>}
+        <div ref={chatEndRef}/>
+      </div>
+      {chatErr && <div style={{padding:'6px 12px',fontSize:12,color:'#A0392B',background:'#F3E3DE'}}>{chatErr}</div>}
+      <div style={{display:'flex',gap:6,padding:10,borderTop:'1px solid var(--line)'}}>
+        <input value={chatInput} onChange={e=>setChatInput(e.target.value)} onKeyDown={e=>{ if(e.key==='Enter'&&!e.shiftKey){ e.preventDefault(); chatSend(); } }} placeholder="Escribí…" disabled={chatBusy} style={{flex:1,border:'1px solid var(--line)',borderRadius:10,padding:'9px 11px',fontSize:13.5,background:'var(--bg)'}}/>
+        <button onClick={chatSend} disabled={chatBusy} style={{background:'var(--ink)',color:'#fff',borderRadius:10,padding:'0 14px',fontSize:14,fontWeight:600,opacity:chatBusy?.6:1}}>➤</button>
+      </div>
+    </div>
+  );
+}
+
+/* ===================== MODAL NUBE ===================== */
+function ModalNube({syncCode,setSyncCode,autosync,setAutosync,syncing,syncMsg,onSubir,onBajar,onClose}){
+  return (
+    <Overlay onClose={onClose}>
+      <div className="serif" style={{fontSize:18,marginBottom:6}}>☁️ Sincronización</div>
+      <div style={{fontSize:13,color:'var(--ink-soft)',marginBottom:14}}>Tu semana se guarda en tu nube (n8n). Usá el <b>mismo código</b> en la compu y en el celu para tener todo igual.</div>
+      <label style={lbl}>Tu código de sync</label>
+      <input value={syncCode} onChange={e=>setSyncCode(e.target.value)} placeholder="ej: gaston2026" autoCapitalize="off" autoCorrect="off" spellCheck={false} style={inp}/>
+      <label style={{display:'flex',alignItems:'center',gap:9,marginTop:14,fontSize:14,cursor:'pointer'}}>
+        <input type="checkbox" checked={autosync} onChange={e=>setAutosync(e.target.checked)} style={{width:18,height:18,accentColor:'#7D9B76'}}/>
+        Auto-sincronizar (baja al abrir, sube al cambiar)
+      </label>
+      <div style={{display:'flex',gap:8,marginTop:18}}>
+        <button onClick={onBajar} disabled={syncing} style={{...btn,flex:1,background:'var(--bg)',border:'1px solid var(--line)',opacity:syncing?.6:1}}>⬇ Bajar</button>
+        <button onClick={onSubir} disabled={syncing} style={{...btn,flex:1,background:'var(--ink)',color:'#fff',opacity:syncing?.6:1}}>⬆ Subir</button>
+      </div>
+      <div style={{minHeight:20,marginTop:12,fontSize:13,color:'var(--ink-soft)',textAlign:'center'}}>{syncing?'Sincronizando…':syncMsg}</div>
+      <button onClick={onClose} style={{...btn,width:'100%',marginTop:8,background:'transparent',border:'1px solid var(--line)'}}>Cerrar</button>
+    </Overlay>
+  );
+}
+
+/* ===================== OVERLAY ===================== */
+function Overlay({children,onClose}){
+  return (
+    <div onClick={onClose} style={{position:'fixed',inset:0,background:'rgba(40,44,38,.38)',zIndex:100,display:'flex',alignItems:'center',justifyContent:'center',padding:16}}>
+      <div onClick={e=>e.stopPropagation()} style={{background:'var(--card)',borderRadius:16,padding:22,width:'100%',maxWidth:380,boxShadow:'0 20px 60px rgba(0,0,0,.25)',maxHeight:'90vh',overflowY:'auto'}}>{children}</div>
+    </div>
+  );
+}
+const lbl = {display:'block',fontSize:12,color:'var(--ink-soft)',marginBottom:4,fontWeight:600};
+const inp = {width:'100%',border:'1px solid var(--line)',borderRadius:9,padding:'10px 11px',fontSize:14,background:'var(--bg)'};
+const btn = {borderRadius:9,padding:'10px 16px',fontSize:14,fontWeight:600};
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+</script>
+<script>
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', function(){ navigator.serviceWorker.register('sw.js').catch(function(){}); });
+}
+</script>
+</body>
+</html>
