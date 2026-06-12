@@ -434,14 +434,7 @@ function App(){
 
         {/* GRILLA */}
         <div style={{flex:1,display:'flex',flexDirection:'column',minWidth:0}}>
-          {esMobile && (
-            <div style={{display:'flex',gap:4,padding:'8px 8px 4px',overflowX:'auto',flexShrink:0}}>
-              {DIAS.map((d,i)=>(
-                <button key={i} onClick={()=>setDiaMobile(i)} style={{flex:'1 0 auto',minWidth:44,padding:'6px 4px',borderRadius:8,fontSize:13,fontWeight: i===diaMobile?700:400,background: i===diaMobile?'var(--ink)':'var(--card)',color:i===diaMobile?'#fff':'var(--ink)',border:'1px solid var(--line)'}}>{d}</button>
-              ))}
-            </div>
-          )}
-          <Grilla {...{bloques, gridRef, esMobile, diaMobile, actSel, addBloque, setEditId}} />
+          <Grilla {...{bloques, gridRef, esMobile, actSel, addBloque, setEditId}} />
           {esMobile && <PanelActividadesMobile {...{data,actSel,setActSel,addActividad}} />}
         </div>
       </div>
@@ -533,61 +526,70 @@ function PanelActividadesMobile({data,actSel,setActSel,addActividad}){
 
 /* ===================== GRILLA ===================== */
 const zoomBtn = {border:'1px solid var(--line)',borderRadius:6,width:27,height:24,background:'var(--card)',fontSize:16,fontWeight:600,lineHeight:1,color:'var(--ink)'};
-function Grilla({bloques, gridRef, esMobile, diaMobile, actSel, addBloque, setEditId}){
-  const diasVisibles = esMobile ? [diaMobile] : [0,1,2,3,4,5,6];
+const ANCHO_KEY='habitos_anchos', HPX_KEY='habitos_hpx';
+function Grilla({bloques, gridRef, esMobile, actSel, addBloque, setEditId}){
   const [nowMin,setNowMin] = useState(()=>{ const d=new Date(); return d.getHours()*60+d.getMinutes(); });
-  const [hPx,setHPx] = useState(()=>Number(localStorage.getItem('habitos_hpx'))||HORA_PX);
-  const [diaFoco,setDiaFoco] = useState(null);
+  const [hPx,setHPx] = useState(()=>Number(localStorage.getItem(HPX_KEY))||HORA_PX);
+  const [anchos,setAnchos] = useState(()=>{ try{ return JSON.parse(localStorage.getItem(ANCHO_KEY))||{}; }catch(e){ return {}; } });
+  const resz = useRef(null);
   useEffect(()=>{ const t=setInterval(()=>{ const d=new Date(); setNowMin(d.getHours()*60+d.getMinutes()); },60000); return ()=>clearInterval(t); },[]);
-  useEffect(()=>{ try{ localStorage.setItem('habitos_hpx',String(hPx)); }catch(e){} }, [hPx]);
+  useEffect(()=>{ try{ localStorage.setItem(HPX_KEY,String(hPx)); }catch(e){} }, [hPx]);
+  useEffect(()=>{ try{ localStorage.setItem(ANCHO_KEY,JSON.stringify(anchos)); }catch(e){} }, [anchos]);
   const hoyWd = (new Date().getDay()+6)%7;
-  const hayFoco = diaFoco!=null && !esMobile;
+  const defW = esMobile?122:150;
+  const anchoDe = dia => Math.round(anchos[dia]||defW);
 
   const colClick = (dia, e) => {
+    if(resz.current) return;
     const rect = e.currentTarget.getBoundingClientRect();
     const y = e.clientY - rect.top;
     let min = Math.round((y / hPx) * 60 / 30) * 30; // snap 30'
     addBloque(dia, min);
   };
-  const zoom = d => setHPx(v => Math.max(26, Math.min(130, v + d)));
+  const zoom = d => setHPx(v => Math.max(26, Math.min(150, v + d)));
+
+  const reszMove = e => { const r=resz.current; if(!r) return; const w=Math.max(46, Math.min(640, r.w0 + (e.clientX - r.x0))); setAnchos(a=>({...a,[r.dia]:w})); };
+  const reszEnd = () => { resz.current=null; window.removeEventListener('pointermove',reszMove); window.removeEventListener('pointerup',reszEnd); };
+  const reszStart = (dia,e) => { e.preventDefault(); e.stopPropagation(); resz.current={dia, x0:e.clientX, w0:anchoDe(dia)}; window.addEventListener('pointermove',reszMove); window.addEventListener('pointerup',reszEnd); };
+
+  const fsTit = w => Math.max(9, Math.min(16, 8.5 + (w-80)*0.032));
+  const fsNota = w => Math.max(8.5, Math.min(14, 8 + (w-80)*0.026));
 
   return (
     <div style={{flex:1,display:'flex',flexDirection:'column',minHeight:0}}>
-      {!esMobile && (
-        <div style={{display:'flex',alignItems:'center',gap:8,padding:'5px 12px',borderBottom:'1px solid var(--line)',flexShrink:0,fontSize:12,color:'var(--ink-soft)'}}>
-          <span>{hayFoco ? 'Mostrando '+DIAS_LARGO[diaFoco]+' en grande' : 'Tocá un día (arriba) para agrandarlo y leer sus notas'}</span>
-          {hayFoco && <button onClick={()=>setDiaFoco(null)} style={{border:'1px solid var(--line)',borderRadius:7,padding:'3px 9px',background:'var(--card)',fontSize:12,color:'var(--ink)'}}>↔ Ver toda la semana</button>}
-          <div style={{flex:1}}/>
-          <span style={{fontSize:11}}>Alto</span>
-          <button onClick={()=>zoom(-8)} title="Más compacto" style={zoomBtn}>−</button>
-          <button onClick={()=>zoom(8)} title="Más alto" style={zoomBtn}>+</button>
-        </div>
-      )}
+      <div style={{display:'flex',alignItems:'center',gap:8,padding:'5px 12px',borderBottom:'1px solid var(--line)',flexShrink:0,fontSize:12,color:'var(--ink-soft)'}}>
+        <span style={{whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>↔ Arrastrá el borde de una columna para ensancharla (la letra se agranda)</span>
+        <button onClick={()=>setAnchos({})} title="Volver todas las columnas al ancho normal" style={{border:'1px solid var(--line)',borderRadius:7,padding:'3px 8px',background:'var(--card)',fontSize:11.5,color:'var(--ink)',whiteSpace:'nowrap'}}>Reset</button>
+        <div style={{flex:1}}/>
+        <span style={{fontSize:11}}>Alto</span>
+        <button onClick={()=>zoom(-8)} title="Más compacto" style={zoomBtn}>−</button>
+        <button onClick={()=>zoom(8)} title="Más alto" style={zoomBtn}>+</button>
+      </div>
       <div ref={gridRef} style={{flex:1,overflow:'auto',position:'relative'}}>
-        <div style={{display:'flex',minWidth: esMobile? '100%':'max(760px, 100%)'}}>
+        <div style={{display:'flex',width:'max-content',minWidth:'100%'}}>
           {/* columna horas */}
-          <div style={{width:48,flexShrink:0,position:'sticky',left:0,zIndex:6,background:'var(--bg)'}}>
+          <div style={{width:46,flexShrink:0,position:'sticky',left:0,zIndex:6,background:'var(--bg)'}}>
             <div style={{height:34,position:'sticky',top:0,zIndex:7,background:'var(--bg)',borderBottom:'1px solid var(--line)'}}/>
             {Array.from({length:24}).map((_,h)=>(
               <div key={h} style={{height:hPx,position:'relative',borderRight:'1px solid var(--line)'}}>
-                <span style={{position:'absolute',top:-7,right:6,fontSize:10.5,color:'var(--ink-soft)'}}>{pad(h)}:00</span>
+                <span style={{position:'absolute',top:-7,right:5,fontSize:10,color:'var(--ink-soft)'}}>{pad(h)}:00</span>
               </div>
             ))}
           </div>
-          {/* columnas de días */}
-          {diasVisibles.map(dia => {
-            const esFoco = dia===diaFoco;
-            const flexV = !hayFoco ? 1 : (esFoco ? 5 : 0.55);
-            const minW = esMobile ? 0 : (!hayFoco ? 116 : (esFoco ? 300 : 50));
-            const comprimida = hayFoco && !esFoco;
+          {/* columnas de días — ancho ajustable a mano (tipo Excel) */}
+          {[0,1,2,3,4,5,6].map(dia => {
+            const w = anchoDe(dia);
+            const ft = fsTit(w), fn = fsNota(w);
             return (
-            <div key={dia} style={{flex:flexV,minWidth:minW,borderRight:'1px solid var(--line)',position:'relative',transition:'flex-grow .18s ease, min-width .18s ease'}}>
-              {/* header día (tocar para agrandar) */}
-              <div onClick={()=>{ if(!esMobile) setDiaFoco(esFoco?null:dia); }}
-                style={{height:34,position:'sticky',top:0,zIndex:5,background: esFoco?'#EAE3D4':'var(--bg)',borderBottom:'1px solid var(--line)',display:'flex',alignItems:'center',justifyContent:'center',gap:5,cursor:esMobile?'default':'pointer',userSelect:'none'}}>
-                <span style={{fontSize:13,fontWeight:dia===hoyWd?700:500,color:dia===hoyWd?'var(--ink)':'var(--ink-soft)',whiteSpace:'nowrap',overflow:'hidden'}}>{esMobile?DIAS_LARGO[dia]:(comprimida?DIAS[dia][0]:DIAS[dia])}</span>
+            <div key={dia} style={{width:w,flexShrink:0,borderRight:'1px solid var(--line)',position:'relative'}}>
+              {/* header con handle de resize */}
+              <div style={{height:34,position:'sticky',top:0,zIndex:5,background: dia===hoyWd?'#F0EADF':'var(--bg)',borderBottom:'1px solid var(--line)',display:'flex',alignItems:'center',justifyContent:'center',gap:5}}>
+                <span style={{fontSize:13,fontWeight:dia===hoyWd?700:500,color:dia===hoyWd?'var(--ink)':'var(--ink-soft)',whiteSpace:'nowrap'}}>{w<66?DIAS[dia][0]:(w<150?DIAS[dia]:DIAS_LARGO[dia])}</span>
                 {dia===hoyWd && <span style={{width:6,height:6,borderRadius:'50%',background:'#C0392B',flexShrink:0}}/>}
-                {esFoco && <span style={{fontSize:10,opacity:.6}}>▾</span>}
+                <div onPointerDown={e=>reszStart(dia,e)} title="Arrastrá para cambiar el ancho de esta columna"
+                  style={{position:'absolute',top:0,right:-2,width:16,height:34,cursor:'col-resize',touchAction:'none',display:'flex',alignItems:'center',justifyContent:'center',zIndex:8}}>
+                  <span style={{width:3,height:17,borderRadius:2,background:'#BBAF98'}}/>
+                </div>
               </div>
               {/* celdas (tocar para crear) */}
               <div style={{position:'relative',height:24*hPx,cursor: actSel?'copy':'pointer'}} onClick={e=>colClick(dia,e)}>
@@ -600,16 +602,17 @@ function Grilla({bloques, gridRef, esMobile, diaMobile, actSel, addBloque, setEd
                   </div>
                 )}
                 {bloques.filter(b=>b.dia===dia).map(b => {
-                  const top = (b.ini/60)*hPx, h = Math.max(15,((b.fin-b.ini)/60)*hPx);
-                  const txt = textoSobre(b.color), chico = h < 32;
+                  const top = (b.ini/60)*hPx, h = Math.max(14,((b.fin-b.ini)/60)*hPx);
+                  const txt = textoSobre(b.color), chico = h < 30;
                   const tip = b.titulo + (b.desc?'\n\n'+b.desc:'') + '\n('+min2hhmm(b.ini)+'–'+min2hhmm(b.fin)+')';
+                  const lineas = Math.max(1, Math.floor((h - (h>44?28:14)) / (fn*1.28)));
                   return (
                     <div key={b.id} title={tip} onClick={e=>{e.stopPropagation();setEditId(b.id);}}
                       style={{position:'absolute',left:2,right:2,top:top+1,height:h-2,background:b.color,color:txt,borderRadius:7,padding: chico?'1px 6px':'3px 7px',
                         overflow:'hidden',boxShadow:'0 1px 2px rgba(0,0,0,.08)',border:'1px solid '+mezclarBorde(b.color),cursor:'pointer',display:'flex',flexDirection:'column',gap:1}}>
-                      <div style={{fontSize: comprimida?10:11.5,fontWeight:600,lineHeight:1.15,whiteSpace:chico?'nowrap':'normal',overflow:'hidden',textOverflow:'ellipsis'}}>{comprimida?b.titulo:(b.titulo+(b.desc?' 📝':''))}</div>
-                      {!chico && !comprimida && <div style={{fontSize:10,opacity:.85}}>{min2hhmm(b.ini)}–{min2hhmm(b.fin)}</div>}
-                      {!chico && !comprimida && b.desc && <div style={{fontSize:9.8,opacity:.85,lineHeight:1.25,marginTop:1,overflow:'hidden',display:'-webkit-box',WebkitLineClamp: esFoco?40:4,WebkitBoxOrient:'vertical',whiteSpace:'normal'}}>{b.desc}</div>}
+                      <div style={{fontSize:ft,fontWeight:600,lineHeight:1.13,whiteSpace:chico?'nowrap':'normal',overflow:'hidden',textOverflow:'ellipsis'}}>{b.titulo}{b.desc?' 📝':''}</div>
+                      {!chico && h>44 && <div style={{fontSize:Math.max(8,fn-1.5),opacity:.8}}>{min2hhmm(b.ini)}–{min2hhmm(b.fin)}</div>}
+                      {!chico && b.desc && <div style={{fontSize:fn,opacity:.87,lineHeight:1.28,marginTop:1,overflow:'hidden',display:'-webkit-box',WebkitLineClamp:lineas,WebkitBoxOrient:'vertical',whiteSpace:'normal'}}>{b.desc}</div>}
                     </div>
                   );
                 })}
